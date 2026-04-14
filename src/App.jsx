@@ -1,0 +1,1485 @@
+// ══════════════════════════════════════════════════════════════════════════
+//  FOUNDER FINANCE DASHBOARD v2.0
+//  Smart Bank Import · Claude AI Insights · Mobile-First
+// ══════════════════════════════════════════════════════════════════════════
+
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { createClient } from "@supabase/supabase-js";
+import {
+  BarChart, Bar, LineChart, Line, PieChart, Pie, Cell,
+  XAxis, YAxis, Tooltip, Legend, ResponsiveContainer, CartesianGrid,
+} from "recharts";
+import * as XLSX from "xlsx";
+
+// ─── CONFIG ──────────────────────────────────────────────────────────────────
+const SB_URL  = "https://wlghcxfrdbbbjldfepks.supabase.co";
+const SB_KEY  = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndsZ2hjeGZyZGJiYmpsZGZlcGtzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzUyMTQ0NTQsImV4cCI6MjA5MDc5MDQ1NH0.g5USyRfhcKA31_6ia7B2QyAuUMBbWbANacFDGLhXZZo";
+const APP_PWD = "founder2026";
+const sb = createClient(SB_URL, SB_KEY);
+
+// ─── CONSTANTS ───────────────────────────────────────────────────────────────
+const ACCOUNTS = [
+  { id:"lrf",      label:"LiveRightFit LLP",  cur:"INR", clr:"#F59E0B" },
+  { id:"grownmind",label:"Grownmind",          cur:"INR", clr:"#6366F1" },
+  { id:"jeet",     label:"Jeet UK Account",    cur:"GBP", clr:"#06B6D4" },
+];
+const BUSINESSES = ["Migrizo","Nutrolis","Assignment"];
+const BIZ_CLR   = { Migrizo:"#6366F1", Nutrolis:"#F59E0B", Assignment:"#06B6D4" };
+const MONTHS    = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const COLORS    = ["#6366F1","#F59E0B","#EF4444","#10B981","#3B82F6","#8B5CF6","#EC4899","#14B8A6","#F97316","#84CC16","#06B6D4","#A855F7","#F43F5E","#0EA5E9","#22C55E"];
+
+const OP_CATS  = ["Amazon Revenue","Flipkart Revenue","Migrizo Revenue","Direct Sales","Consultation","Services","Assignment Payment","Website Revenue","Offline Revenue","Other Income","Misc Income","Miscellaneous Income"];
+const CAP_CATS = ["Capital Injection","Business Loan Received","Investment / Loan Received","Internal Transfer"];
+const INC_CATS = [...OP_CATS, ...CAP_CATS];
+const EXP_CATS = ["Meta Ads","Migrizo Expenses","Credit Card Payment","Salaries","Freelancer","Procurement","Equipment & Office","Professional Services","Software","Shipping","Marketplace Fees","GST & Tax","Loan / EMI","Telecom & Internet","Food & Entertainment","Misc Expense","Owner Drawings","Founder Travel","Inter-company Transfer","Amazon Ads Spend","Flipkart Ads Spend"];
+
+const DEFAULT_CHANNELS = [
+  { id:1, name:"Amazon",     biz:"Nutrolis",   clr:"#F97316", bg:"#FFF7ED", cats:["Amazon Revenue"] },
+  { id:2, name:"Flipkart",   biz:"Nutrolis",   clr:"#6366F1", bg:"#EEF2FF", cats:["Flipkart Revenue"] },
+  { id:3, name:"Migrizo",    biz:"Migrizo",    clr:"#8B5CF6", bg:"#F5F3FF", cats:["Migrizo Revenue","Consultation","Services"] },
+  { id:4, name:"Offline",    biz:"Nutrolis",   clr:"#10B981", bg:"#F0FDF4", cats:["Offline Revenue","Direct Sales"] },
+  { id:5, name:"Website",    biz:"Nutrolis",   clr:"#3B82F6", bg:"#EFF6FF", cats:["Website Revenue"] },
+  { id:6, name:"Assignment", biz:"Assignment", clr:"#06B6D4", bg:"#ECFEFF", cats:["Assignment Payment"] },
+];
+
+// ─── AUTO-CATEGORISATION RULES ───────────────────────────────────────────────
+const CAT_RULES = [
+  // Income
+  { kw:["amazon seller","amazon payment","amz seller"],         type:"Income",  cat:"Amazon Revenue",        biz:"Nutrolis" },
+  { kw:["flipkart","fk nodal"],                                 type:"Income",  cat:"Flipkart Revenue",      biz:"Nutrolis" },
+  { kw:["migrizo","migration consult","visa consult"],          type:"Income",  cat:"Migrizo Revenue",       biz:"Migrizo" },
+  { kw:["consultation","gkv kickstart","gkv consult","era paid","abhishek bharne","sukhdeep"], type:"Income", cat:"Consultation", biz:"Migrizo" },
+  { kw:["assignment revenue","assignment payment","assignment"], type:"Income",  cat:"Assignment Payment",    biz:"Assignment" },
+  // Expenses
+  { kw:["facebook","meta ads","fb ads","instagram ads"],        type:"Expense", cat:"Meta Ads" },
+  { kw:["shiprocket","bigfoot","xpressbees","delhivery","ekart","bluedart","rising star","courier"], type:"Expense", cat:"Shipping" },
+  { kw:["salary","sal ","payroll","mansi behal","bhaskar manish"], type:"Expense", cat:"Salaries" },
+  { kw:["credit card","icici credit","idfc credit","cc pay"],   type:"Expense", cat:"Credit Card Payment" },
+  { kw:["amazon india","amazon fee","marketplace fee","amazon ads"], type:"Expense", cat:"Marketplace Fees" },
+  { kw:["gst","tax payment","gst payment","apob"],              type:"Expense", cat:"GST & Tax" },
+  { kw:["zoho","notion","godaddy","tata stars","business card yearly"], type:"Expense", cat:"Software" },
+  { kw:["airtel","jio","vi ","vodafone","bsnl","mobile bill"],  type:"Expense", cat:"Telecom & Internet" },
+  { kw:["oribite","nutra science","procurement","raw material"], type:"Expense", cat:"Procurement" },
+  { kw:["ca fee","chartered","shashank","mohd a"],              type:"Expense", cat:"Professional Services" },
+  { kw:["croma","blue star","equipment","ac ","electronics"],   type:"Expense", cat:"Equipment & Office" },
+  { kw:["food","restaurant","swiggy","zomato","chaayos","cafe"], type:"Expense", cat:"Food & Entertainment" },
+  { kw:["flight","hotel","accommodation","irctc","makemytrip"], type:"Expense", cat:"Founder Travel" },
+  { kw:["loan emi","emi payment","neelam"],                     type:"Expense", cat:"Loan / EMI" },
+  { kw:["freelancer","akash verma","solanki","ayushi","vishakha","sapna"],type:"Expense",cat:"Freelancer" },
+  { kw:["grownmind","intercompany","inter-company"],            type:"Expense", cat:"Inter-company Transfer" },
+  { kw:["ficci"],                                               type:"Expense", cat:"Professional Services" },
+];
+
+function autoCategorize(desc = "", type = "") {
+  const d = desc.toLowerCase();
+  for (const rule of CAT_RULES) {
+    if (rule.type === type && rule.kw.some(k => d.includes(k))) {
+      return { category: rule.cat, business: rule.biz || (type === "Income" ? "Nutrolis" : "Nutrolis") };
+    }
+  }
+  return {
+    category: type === "Income" ? "Other Income" : "Misc Expense",
+    business: "Nutrolis",
+  };
+}
+
+// ─── UTILITIES ────────────────────────────────────────────────────────────────
+const acct  = (id) => ACCOUNTS.find(a => a.id === id) || { label:id, cur:"INR", clr:"#94A3B8" };
+const fxAmt = (e, rate) => e.account === "jeet" ? e.amount * rate : e.amount;
+const getMonth = (d) => d ? parseInt(d.split("-")[1]) - 1 : -1;
+const getYear  = (d) => d ? d.split("-")[0] : "";
+
+const fmt = (n) => {
+  const abs = Math.abs(n), pfx = n < 0 ? "-₹" : "₹";
+  if (abs >= 1e5) return pfx + (abs/1e5).toFixed(2) + "L";
+  return pfx + Math.round(abs).toLocaleString("en-IN");
+};
+const fmtCur = (n, cur) => cur === "GBP"
+  ? (n < 0 ? "-£" : "£") + Math.abs(n).toLocaleString("en-GB", { minimumFractionDigits:0 })
+  : fmt(n);
+const fmtK = (n) => {
+  const abs = Math.abs(n);
+  if (abs >= 1e5) return (n < 0 ? "-₹" : "₹") + (abs/1e5).toFixed(1) + "L";
+  if (abs >= 1e3) return (n < 0 ? "-₹" : "₹") + (abs/1e3).toFixed(0) + "k";
+  return fmt(n);
+};
+const pct = (v, t) => t > 0 ? Math.round(v/t*100) + "%" : "0%";
+
+function parseDate(s = "") {
+  s = s.toString().trim().replace(/['"` ]/g,"");
+  let m;
+  if ((m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/))) return `${m[3]}-${m[2].padStart(2,"0")}-${m[1].padStart(2,"0")}`;
+  if ((m = s.match(/^(\d{4})[\/\-](\d{2})[\/\-](\d{2})$/))) return s;
+  if ((m = s.match(/^(\d{1,2})\s+(\w{3})\s+(\d{4})$/i))) {
+    const mo = {jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
+    const n = mo[m[2].toLowerCase()];
+    if (n) return `${m[3]}-${String(n).padStart(2,"0")}-${m[1].padStart(2,"0")}`;
+  }
+  // Excel date serial
+  if (/^\d{5}$/.test(s)) {
+    const d = XLSX.SSF.parse_date_code(parseInt(s));
+    if (d) return `${d.y}-${String(d.m).padStart(2,"0")}-${String(d.d).padStart(2,"0")}`;
+  }
+  return null;
+}
+
+function parseAmount(s = "") {
+  if (!s && s !== 0) return 0;
+  const v = parseFloat(String(s).replace(/[₹£$,\s]/g,"")) || 0;
+  return isNaN(v) ? 0 : Math.abs(v);
+}
+
+function parseCSV(text) {
+  const lines = text.replace(/\r\n/g,"\n").replace(/\r/g,"\n").split("\n").filter(l => l.trim());
+  if (lines.length < 2) return null;
+  const parseRow = (line) => {
+    const res = []; let inQ = false, cur = "";
+    for (let i = 0; i < line.length; i++) {
+      if (line[i] === '"') { inQ = !inQ; }
+      else if (line[i] === "," && !inQ) { res.push(cur.trim()); cur = ""; }
+      else cur += line[i];
+    }
+    res.push(cur.trim());
+    return res;
+  };
+  return { headers: parseRow(lines[0]), rows: lines.slice(1).map(parseRow) };
+}
+
+function detectCols(headers) {
+  const map = { date:-1, desc:-1, debit:-1, credit:-1, amount:-1, balance:-1 };
+  headers.forEach((h, i) => {
+    const l = h.toLowerCase().trim().replace(/\s+/g," ");
+    if (map.date<0   && /date/.test(l) && !/update|mandate/.test(l)) map.date=i;
+    if (map.desc<0   && /narrat|remark|description|particular|detail|reference|transaction\s*remarks?/.test(l)) map.desc=i;
+    if (map.debit<0  && /debit|withdrawal|dr$|paid.?out|outflow/.test(l)) map.debit=i;
+    if (map.credit<0 && /credit|deposit|cr$|paid.?in|inflow/.test(l)) map.credit=i;
+    if (map.amount<0 && /^(amount|amt)$/.test(l)) map.amount=i;
+    if (map.balance<0&& /balance|bal$/.test(l)) map.balance=i;
+  });
+  // fallback: if no debit/credit found, find numeric columns by header position
+  if (map.debit<0 && map.credit<0 && map.amount<0) {
+    headers.forEach((h,i) => {
+      if (i===map.date||i===map.desc||i===map.balance) return;
+      if (map.debit<0) map.debit=i;
+      else if (map.credit<0) map.credit=i;
+    });
+  }
+  return map;
+}
+
+// Scan all rows to find the REAL header row — handles IDFC, ICICI, HDFC junk rows at top
+function findHeaderRow(allRows) {
+  const dateKw = /^(date|txn\.?date|value\.?date|posting\.?date|trans\.?date|dt)$/i;
+  const amtKw  = /^(debit|credit|dr|cr|withdrawal|deposit|debit.?amount|credit.?amount|amount|withdraw|paid.?in|paid.?out|outflow|inflow)$/i;
+  // Pass 1: look for row that has exact date + amount keyword cells
+  for (let i = 0; i < Math.min(allRows.length, 30); i++) {
+    const row = (allRows[i]||[]).map(c => String(c||"").trim());
+    const nonEmpty = row.filter(c=>c!=="");
+    if (nonEmpty.length < 2) continue;
+    if (row.some(c=>dateKw.test(c)) && row.some(c=>amtKw.test(c))) return i;
+  }
+  // Pass 2: relaxed — any row containing "date" AND ("debit" or "credit" or "amount")
+  for (let i = 0; i < Math.min(allRows.length, 30); i++) {
+    const row = (allRows[i]||[]).map(c => String(c||"").toLowerCase().trim());
+    const nonEmpty = row.filter(c=>c!=="");
+    if (nonEmpty.length < 2) continue;
+    if (row.some(c=>c.includes("date")) && row.some(c=>/debit|credit|amount|withdraw|deposit/.test(c))) return i;
+  }
+  // Pass 3: find row with most non-numeric, non-empty cells (likely the header row)
+  let best=0, bestScore=0;
+  for (let i=0; i<Math.min(allRows.length,30); i++) {
+    const row=(allRows[i]||[]).map(c=>String(c||"").trim());
+    const score=row.filter(c=>c!==""&&isNaN(c.replace(/[,\/\-]/g,""))).length;
+    if (score>bestScore){bestScore=score;best=i;}
+  }
+  return best;
+}
+
+// ─── SUPABASE HELPERS ─────────────────────────────────────────────────────────
+const dbAdd    = async (e)  => sb.from("ffd_entries").insert([e]);
+const dbUpdate = async (e)  => sb.from("ffd_entries").update(e).eq("id",e.id);
+const dbDelete = async (id) => sb.from("ffd_entries").delete().eq("id",id);
+const dbAddChannel = async(c)  => sb.from("ffd_channels").upsert([c]);
+const dbDelChannel = async(id) => sb.from("ffd_channels").delete().eq("id",id);
+const dbSetting    = async(k,v)=> sb.from("ffd_settings").upsert({key:k,value:v});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  SMART IMPORT MODAL
+// ═══════════════════════════════════════════════════════════════════════════════
+function SmartImport({ accountId, entries, onDone, onClose }) {
+  const [step,      setStep]     = useState(1); // 1=upload 2=preview 3=done
+  const [preview,   setPreview]  = useState([]);
+  const [selected,  setSelected] = useState(new Set());
+  const [editRow,   setEditRow]  = useState(null);
+  const [dragging,  setDragging] = useState(false);
+  const [loading,   setLoading]  = useState(false);
+  const [progress,  setProgress] = useState(0);
+  const [summary,   setSummary]  = useState(null);
+  const [filterDup, setFilterDup]= useState(false);
+  const [detected,  setDetected] = useState("");
+  const fileRef = useRef();
+
+  const processRows = useCallback((allRows, filename) => {
+    const hdrIdx  = findHeaderRow(allRows);
+    const headers = (allRows[hdrIdx]||[]).map(c => String(c||"").trim());
+    const dataRows= allRows.slice(hdrIdx+1).map(r=>(r||[]).map(c=>String(c||"").trim())).filter(r=>r.some(c=>c!==""));
+    const map     = detectCols(headers);
+    const detectedStr = `Auto-detected: ${headers[map.date]||"?"} | ${headers[map.desc]||"?"} | ${headers[map.debit]>=0?headers[map.debit]:"—"} / ${headers[map.credit]>=0?headers[map.credit]:"—"}`;
+    setDetected(detectedStr);
+    const existSet = new Set(entries.map(e=>`${e.date}||${e.amount}||${(e.description||"").toLowerCase().slice(0,20)}`));
+    const rows = dataRows.map((row,i)=>{
+      const dateStr  = map.date  >= 0 ? parseDate(row[map.date])    : null;
+      const desc     = map.desc  >= 0 ? (row[map.desc]||"").trim()  : `Row ${i+1}`;
+      const debitAmt = map.debit >= 0 ? parseAmount(row[map.debit]) : 0;
+      const creditAmt= map.credit>= 0 ? parseAmount(row[map.credit]): 0;
+      const singleAmt= map.amount>= 0 ? parseFloat(String(row[map.amount]||"0").replace(/[₹£$,\s]/g,""))||0 : 0;
+      if (!dateStr) return null;
+      let type, amount;
+      if      (debitAmt>0 && creditAmt===0)  { type="Expense"; amount=debitAmt; }
+      else if (creditAmt>0 && debitAmt===0)  { type="Income";  amount=creditAmt; }
+      else if (debitAmt>0 && creditAmt>0)    { type="Expense"; amount=debitAmt; } // both filled — treat debit
+      else if (singleAmt!==0)                { type=singleAmt<0?"Expense":"Income"; amount=Math.abs(singleAmt); }
+      else return null;
+      if (!amount||amount<=0) return null;
+      const {category,business}=autoCategorize(desc,type);
+      const dupKey=`${dateStr}||${amount}||${desc.toLowerCase().slice(0,20)}`;
+      return {_id:i,date:dateStr,description:desc,type,amount,category,business,account:accountId,isDuplicate:existSet.has(dupKey)};
+    }).filter(Boolean);
+    setPreview(rows);
+    setSelected(new Set(rows.filter(r=>!r.isDuplicate).map(r=>r._id)));
+    setStep(2);
+    setLoading(false);
+  }, [entries, accountId]);
+
+  const handleFile = useCallback((file) => {
+    if (!file) return;
+    const ext = file.name.split(".").pop().toLowerCase();
+    setLoading(true);
+    if (["xlsx","xls","ods"].includes(ext)) {
+      const r = new FileReader();
+      r.onload = e => {
+        try {
+          const wb = XLSX.read(new Uint8Array(e.target.result), {type:"array"});
+          const ws = wb.Sheets[wb.SheetNames[0]];
+          const allRows = XLSX.utils.sheet_to_json(ws, {header:1, defval:"", raw:false});
+          processRows(allRows, file.name);
+        } catch(err) { alert("Could not read file: "+err.message); setLoading(false); }
+      };
+      r.readAsArrayBuffer(file);
+    } else {
+      const r = new FileReader();
+      r.onload = e => {
+        try {
+          const raw = parseCSV(e.target.result);
+          if (!raw) { alert("Could not parse CSV."); setLoading(false); return; }
+          processRows([raw.headers,...raw.rows], file.name);
+        } catch(err) { alert("Could not read file: "+err.message); setLoading(false); }
+      };
+      r.readAsText(file);
+    }
+  }, [processRows]);
+
+  const onDrop = useCallback((e) => { e.preventDefault(); setDragging(false); handleFile(e.dataTransfer.files[0]); }, [handleFile]);
+
+  const doImport = async () => {
+    setLoading(true);
+    const toImport = preview.filter(r=>selected.has(r._id));
+    const chunks=[];
+    for (let i=0;i<toImport.length;i+=50) chunks.push(toImport.slice(i,i+50));
+    let done=0;
+    for (const chunk of chunks) {
+      const rows=chunk.map(r=>({id:Date.now()+Math.floor(Math.random()*99999),date:r.date,business:r.business,account:r.account,type:r.type,category:r.category,description:r.description,amount:r.amount,source:"import"}));
+      await sb.from("ffd_entries").insert(rows);
+      done+=chunk.length;
+      setProgress(Math.round(done/toImport.length*100));
+    }
+    setSummary({imported:toImport.length,skipped:preview.filter(r=>r.isDuplicate).length,total:preview.length});
+    onDone(toImport);
+    setStep(3);
+    setLoading(false);
+  };
+
+  const toggleRow = (id) => setSelected(s=>{const n=new Set(s);n.has(id)?n.delete(id):n.add(id);return n;});
+  const toggleAll = () => {
+    const vis=filterDup?preview.filter(r=>!r.isDuplicate):preview;
+    const allSel=vis.every(r=>selected.has(r._id));
+    setSelected(s=>{const n=new Set(s);vis.forEach(r=>allSel?n.delete(r._id):n.add(r._id));return n;});
+  };
+  const displayed = filterDup ? preview.filter(r=>!r.isDuplicate) : preview;
+
+  return (
+    <div style={styles.overlay} onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div style={styles.importModal}>
+        <div style={styles.importHeader}>
+          <div>
+            <p style={{margin:0,fontWeight:800,fontSize:18,color:"#111827"}}>📥 Smart Bank Import</p>
+            <p style={{margin:"2px 0 0",fontSize:13,color:"#6B7280"}}>{acct(accountId).label} · CSV, Excel, XLSX — columns auto-detected</p>
+          </div>
+          <button onClick={onClose} style={styles.closeBtn}>✕</button>
+        </div>
+
+        {/* Step pills */}
+        <div style={{display:"flex",gap:0,borderBottom:"1px solid #E5E7EB"}}>
+          {["Upload","Preview & Select","Done"].map((s,i)=>(
+            <div key={s} style={{flex:1,padding:"10px 4px",textAlign:"center",fontSize:12,fontWeight:step>i?700:400,color:step>i?"#4F46E5":"#9CA3AF",borderBottom:step===i+1?"2px solid #4F46E5":"2px solid transparent"}}>
+              {i+1}. {s}
+            </div>
+          ))}
+        </div>
+
+        <div style={{padding:"20px",overflowY:"auto",maxHeight:"calc(92vh - 130px)"}}>
+
+          {/* STEP 1 */}
+          {step===1 && (
+            <div>
+              <div
+                style={{...styles.dropZone,...(dragging?styles.dropZoneActive:{})}}
+                onDragOver={e=>{e.preventDefault();setDragging(true)}}
+                onDragLeave={()=>setDragging(false)}
+                onDrop={onDrop}
+                onClick={()=>fileRef.current?.click()}
+              >
+                <div style={{fontSize:52,marginBottom:12}}>📂</div>
+                <p style={{fontWeight:800,fontSize:17,margin:"0 0 6px",color:"#374151"}}>Drop your bank statement here</p>
+                <p style={{fontSize:14,color:"#6B7280",margin:"0 0 16px"}}>or tap to browse · columns auto-detected instantly</p>
+                <div style={{display:"flex",gap:8,justifyContent:"center",flexWrap:"wrap"}}>
+                  {["CSV","XLS","XLSX","ODS"].map(t=>(
+                    <span key={t} style={{padding:"4px 12px",background:"#EEF2FF",borderRadius:8,fontSize:13,fontWeight:600,color:"#4F46E5"}}>{t}</span>
+                  ))}
+                </div>
+                <input ref={fileRef} type="file" accept=".csv,.xlsx,.xls,.ods" style={{display:"none"}} onChange={e=>handleFile(e.target.files[0])} />
+              </div>
+              {loading && (
+                <div style={{textAlign:"center",marginTop:24}}>
+                  <div style={{width:40,height:40,border:"4px solid #E5E7EB",borderTop:"4px solid #4F46E5",borderRadius:"50%",animation:"spin 1s linear infinite",margin:"0 auto 12px"}}/>
+                  <p style={{color:"#6B7280",fontSize:14}}>Reading file & detecting columns…</p>
+                </div>
+              )}
+              <div style={{marginTop:20,padding:"12px 16px",background:"#FFFBEB",borderRadius:12,border:"1px solid #FDE68A"}}>
+                <p style={{margin:"0 0 6px",fontWeight:700,fontSize:13,color:"#92400E"}}>💡 How to export from your bank</p>
+                <p style={{margin:0,fontSize:13,color:"#78350F",lineHeight:1.7}}>
+                  <b>IDFC:</b> NetBanking → Accounts → Statement → Download Excel<br/>
+                  <b>ICICI:</b> NetBanking → Accounts → View/Download Statement → Excel<br/>
+                  <b>HDFC:</b> NetBanking → Statement of Account → Download<br/>
+                  <b>Any bank:</b> Download CSV or Excel — everything auto-detected ✅
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* STEP 2 — Preview */}
+          {step===2 && (
+            <div>
+              <div style={{background:"#EEF2FF",borderRadius:10,padding:"10px 14px",fontSize:13,color:"#4F46E5",marginBottom:12,fontWeight:500}}>
+                ✅ {detected}
+              </div>
+              <div style={{display:"flex",gap:10,marginBottom:12,flexWrap:"wrap",alignItems:"center"}}>
+                <span style={{...styles.badge,background:"#DCFCE7",color:"#166534"}}>✅ {preview.filter(r=>!r.isDuplicate).length} new</span>
+                <span style={{...styles.badge,background:"#FEF9C3",color:"#713F12"}}>🔁 {preview.filter(r=>r.isDuplicate).length} already exist</span>
+                <span style={{...styles.badge,background:"#EEF2FF",color:"#4F46E5"}}>☑ {selected.size} selected</span>
+                <label style={{display:"flex",alignItems:"center",gap:6,fontSize:13,color:"#374151",marginLeft:"auto",cursor:"pointer"}}>
+                  <input type="checkbox" checked={filterDup} onChange={e=>setFilterDup(e.target.checked)}/>
+                  Hide existing
+                </label>
+              </div>
+              <div style={{overflowX:"auto",maxHeight:"48vh",overflowY:"auto",border:"1px solid #E5E7EB",borderRadius:10}}>
+                <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,minWidth:600}}>
+                  <thead style={{position:"sticky",top:0,background:"#F9FAFB",zIndex:1}}>
+                    <tr>
+                      <th style={styles.th}><input type="checkbox" onChange={toggleAll} checked={displayed.length>0&&displayed.every(r=>selected.has(r._id))}/></th>
+                      <th style={styles.th}>Date</th>
+                      <th style={styles.th}>Description</th>
+                      <th style={styles.th}>Type</th>
+                      <th style={styles.th}>Category</th>
+                      <th style={{...styles.th,textAlign:"right"}}>Amount</th>
+                      <th style={styles.th}></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {displayed.map((row,i)=>(
+                      <tr key={row._id} style={{background:row.isDuplicate?"#FFFBEB":i%2===0?"#fff":"#FAFAFA",opacity:row.isDuplicate?0.6:1}}>
+                        <td style={styles.td}><input type="checkbox" checked={selected.has(row._id)} onChange={()=>toggleRow(row._id)}/></td>
+                        <td style={{...styles.td,whiteSpace:"nowrap"}}>{row.date}</td>
+                        <td style={{...styles.td,maxWidth:180,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={row.description}>{row.description}</td>
+                        <td style={styles.td}><span style={{...styles.badge,background:row.type==="Income"?"#DCFCE7":"#FEE2E2",color:row.type==="Income"?"#166534":"#7F1D1D",fontSize:11}}>{row.type}</span></td>
+                        <td style={{...styles.td,fontSize:11,color:"#374151"}}>{row.category}</td>
+                        <td style={{...styles.td,fontWeight:700,color:row.type==="Income"?"#059669":"#DC2626",textAlign:"right",whiteSpace:"nowrap"}}>
+                          {row.isDuplicate&&<span title="Already exists" style={{marginRight:4}}>🔁</span>}
+                          {fmt(row.amount)}
+                        </td>
+                        <td style={styles.td}><button onClick={()=>setEditRow({...row})} style={{padding:"3px 8px",fontSize:11,background:"#EEF2FF",border:"none",borderRadius:6,cursor:"pointer",color:"#4F46E5"}}>Edit</button></td>
+                      </tr>
+                    ))}
+                    {displayed.length===0&&<tr><td colSpan={7} style={{...styles.td,textAlign:"center",padding:40,color:"#9CA3AF"}}>No entries to show.</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{display:"flex",gap:10,marginTop:16}}>
+                <button onClick={()=>setStep(1)} style={styles.btnGhost}>← Back</button>
+                <button onClick={doImport} style={{...styles.btnPrimary,flex:1}} disabled={selected.size===0||loading}>
+                  {loading?`Importing… ${progress}%`:`Import ${selected.size} entries →`}
+                </button>
+              </div>
+              {loading&&<div style={{marginTop:10,height:6,background:"#E5E7EB",borderRadius:4,overflow:"hidden"}}><div style={{height:"100%",width:`${progress}%`,background:"#4F46E5",borderRadius:4,transition:"width 0.3s"}}/></div>}
+            </div>
+          )}
+
+          {/* STEP 3 — Done */}
+          {step===3&&summary&&(
+            <div style={{textAlign:"center",padding:"40px 20px"}}>
+              <div style={{fontSize:64,marginBottom:16}}>🎉</div>
+              <p style={{fontSize:22,fontWeight:800,color:"#111827",margin:"0 0 20px"}}>Import Complete!</p>
+              <div style={{display:"flex",gap:12,justifyContent:"center",marginBottom:24,flexWrap:"wrap"}}>
+                <div style={{padding:"14px 28px",background:"#DCFCE7",borderRadius:12}}>
+                  <div style={{fontSize:32,fontWeight:800,color:"#059669"}}>{summary.imported}</div>
+                  <div style={{fontSize:13,color:"#166534"}}>imported</div>
+                </div>
+                <div style={{padding:"14px 28px",background:"#FEF9C3",borderRadius:12}}>
+                  <div style={{fontSize:32,fontWeight:800,color:"#B45309"}}>{summary.skipped}</div>
+                  <div style={{fontSize:13,color:"#78350F"}}>skipped (already existed)</div>
+                </div>
+              </div>
+              <button onClick={onClose} style={{...styles.btnPrimary,padding:"12px 40px",fontSize:15}}>Done ✓</button>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Edit row inline */}
+      {editRow&&(
+        <div style={{...styles.overlay,zIndex:1100}} onClick={e=>e.target===e.currentTarget&&setEditRow(null)}>
+          <div style={{background:"#fff",borderRadius:16,padding:20,width:"90%",maxWidth:400,boxShadow:"0 25px 60px rgba(0,0,0,0.25)"}}>
+            <p style={{fontWeight:700,fontSize:15,margin:"0 0 14px"}}>Edit Before Import</p>
+            {[["Type","type",["Income","Expense"]],["Category","category",editRow.type==="Income"?INC_CATS:EXP_CATS],["Business","business",BUSINESSES]].map(([lbl,key,opts])=>(
+              <div key={key} style={{marginBottom:12}}>
+                <label style={styles.formLabel}>{lbl}</label>
+                <select style={styles.select} value={editRow[key]} onChange={e=>setEditRow(r=>({...r,[key]:e.target.value}))}>
+                  {opts.map(o=><option key={o}>{o}</option>)}
+                </select>
+              </div>
+            ))}
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={()=>setEditRow(null)} style={styles.btnGhost}>Cancel</button>
+              <button onClick={()=>{setPreview(p=>p.map(r=>r._id===editRow._id?{...editRow}:r));setEditRow(null);}} style={styles.btnPrimary}>Save</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  AI INSIGHTS (CLAUDE-POWERED)
+// ═══════════════════════════════════════════════════════════════════════════════
+function AIInsightsTab({ entries, channels, fxRate, apiKey, onSetApiKey }) {
+  const [loading,  setLoading]  = useState(false);
+  const [result,   setResult]   = useState(null);
+  const [error,    setError]    = useState(null);
+  const [keyInput, setKeyInput] = useState(apiKey || "");
+  const [savingKey,setSavingKey]= useState(false);
+  const [msgs,     setMsgs]     = useState([]);
+
+  const fe = useCallback((e) => fxAmt(e, fxRate), [fxRate]);
+
+  // Build comprehensive prompt
+  const buildPrompt = useCallback(() => {
+    const incEntries = entries.filter(e=>e.type==="Income");
+    const expEntries = entries.filter(e=>e.type==="Expense");
+    const totalInc   = incEntries.reduce((s,e)=>s+fe(e),0);
+    const totalExp   = expEntries.reduce((s,e)=>s+fe(e),0);
+    const opRev      = incEntries.filter(e=>OP_CATS.includes(e.category)).reduce((s,e)=>s+fe(e),0);
+
+    // Monthly breakdown
+    const monthly = MONTHS.map((m,i)=>({
+      month:m,
+      inc:  incEntries.filter(e=>getMonth(e.date)===i).reduce((s,e)=>s+fe(e),0),
+      exp:  expEntries.filter(e=>getMonth(e.date)===i).reduce((s,e)=>s+fe(e),0),
+      opR:  incEntries.filter(e=>getMonth(e.date)===i&&OP_CATS.includes(e.category)).reduce((s,e)=>s+fe(e),0),
+    })).filter(m=>m.inc>0||m.exp>0);
+
+    // Expense categories
+    const expCats = {};
+    expEntries.forEach(e=>{ expCats[e.category]=(expCats[e.category]||0)+fe(e); });
+    const topExp = Object.entries(expCats).sort((a,b)=>b[1]-a[1]).slice(0,8)
+      .map(([k,v])=>`${k}: ₹${Math.round(v/1000)}k`).join(", ");
+
+    // Channel performance
+    const chanData = channels.map(ch=>({
+      name:ch.name,
+      rev: incEntries.filter(e=>ch.cats.includes(e.category)).reduce((s,e)=>s+fe(e),0)
+    })).filter(c=>c.rev>0).sort((a,b)=>b.rev-a.rev)
+      .map(c=>`${c.name}: ₹${Math.round(c.rev/1000)}k`).join(", ");
+
+    // Debt
+    const loans = incEntries.filter(e=>["Business Loan Received","Investment / Loan Received"].includes(e.category)).reduce((s,e)=>s+fe(e),0);
+
+    return `You are a sharp CFO-level advisor. Analyze this founder's finances and give SPECIFIC, ACTIONABLE advice.
+
+BUSINESS: LiveRightFit LLP (Nutrolis supplements + Migrizo UK immigration + Assignment consulting). Founder: Shailen, India-based.
+
+FINANCIAL DATA (INR, ${new Date().getFullYear()}):
+- Total Cash In: ₹${Math.round(totalInc/1000)}k | Total Expenses: ₹${Math.round(totalExp/1000)}k | Net: ₹${Math.round((totalInc-totalExp)/1000)}k
+- Operating Revenue (actual sales): ₹${Math.round(opRev/1000)}k (${Math.round(opRev/totalInc*100)}% of total inflow)
+- Total Loans/Investment Received: ₹${Math.round(loans/1000)}k (DEBT)
+- Monthly avg burn: ₹${Math.round(totalExp/monthly.length/1000)}k/month
+- Runway: ~${opRev>0?Math.round((totalInc-totalExp)/(totalExp/monthly.length)):0} months
+
+MONTHLY TREND:
+${monthly.map(m=>`${m.month}: In=₹${Math.round(m.inc/1000)}k, Exp=₹${Math.round(m.exp/1000)}k, OpRev=₹${Math.round(m.opR/1000)}k`).join("\n")}
+
+EXPENSE BREAKDOWN (top 8): ${topExp}
+REVENUE BY CHANNEL: ${chanData}
+
+Return ONLY valid JSON, no markdown, exactly this structure:
+{
+  "score": 62,
+  "scoreLabel": "Fair",
+  "scoreColor": "#F59E0B",
+  "burnRate": "₹X.XL/mo",
+  "runway": "X months",
+  "headline": "One punchy sentence about the business financial state",
+  "insights": [
+    {"title":"Title","body":"Specific finding with numbers","type":"warning"},
+    {"title":"Title","body":"Specific finding with numbers","type":"success"},
+    {"title":"Title","body":"Specific finding with numbers","type":"info"}
+  ],
+  "recommendations": [
+    {"title":"Action title","action":"Specific step to take this week","priority":"high","tag":"Revenue"},
+    {"title":"Action title","action":"Specific step to take this week","priority":"medium","tag":"Cost"},
+    {"title":"Action title","action":"Specific step to take this week","priority":"low","tag":"Strategy"}
+  ],
+  "plan": [
+    {"week":"Week 1-2","action":"Specific action","goal":"Measurable outcome"},
+    {"week":"Week 3-4","action":"Specific action","goal":"Measurable outcome"},
+    {"week":"Month 2","action":"Specific action","goal":"Measurable outcome"},
+    {"week":"Month 3","action":"Specific action","goal":"Measurable outcome"}
+  ]
+}`;
+  }, [entries, channels, fxRate, fe]);
+
+  const generate = async () => {
+    const key = keyInput.trim();
+    if (!key) { setError("Please enter your Claude API key first."); return; }
+    setLoading(true); setError(null); setResult(null);
+    const loadMsgs = [
+      "Analysing 226 transactions…",
+      "Calculating burn rate & runway…",
+      "Identifying revenue patterns…",
+      "Building strategic recommendations…",
+      "Finalising insights…"
+    ];
+    let mi = 0;
+    setMsgs([loadMsgs[mi]]);
+    const interval = setInterval(()=>{ mi=(mi+1)%loadMsgs.length; setMsgs([loadMsgs[mi]]); }, 2000);
+    try {
+      const prompt = buildPrompt();
+      const res = await fetch("https://api.anthropic.com/v1/messages", {
+        method:"POST",
+        headers:{
+          "Content-Type":"application/json",
+          "x-api-key": key,
+          "anthropic-version":"2023-06-01",
+          "anthropic-dangerous-direct-browser-access":"true"
+        },
+        body: JSON.stringify({
+          model:"claude-sonnet-4-5",
+          max_tokens:2048,
+          messages:[{ role:"user", content:prompt }]
+        })
+      });
+      if (!res.ok) { const e=await res.json(); throw new Error(e.error?.message||"API error"); }
+      const data = await res.json();
+      const text = data.content[0].text.replace(/```json\n?|```/g,"").trim();
+      setResult(JSON.parse(text));
+      if (key !== apiKey) { onSetApiKey(key); }
+    } catch(e) {
+      setError(e.message.includes("parse") ? "AI returned unexpected format, please try again." : e.message);
+    } finally { clearInterval(interval); setLoading(false); }
+  };
+
+  const saveKey = async () => {
+    setSavingKey(true);
+    await dbSetting("claude_key", keyInput.trim());
+    onSetApiKey(keyInput.trim());
+    setSavingKey(false);
+  };
+
+  const scoreColor = result?.scoreColor || "#6B7280";
+
+  return (
+    <div style={{ padding:"0 0 40px" }}>
+      {/* API Key setup */}
+      {!apiKey && (
+        <div style={{ background:"#FFFBEB", border:"1px solid #FDE68A", borderRadius:12, padding:16, marginBottom:20 }}>
+          <p style={{ fontWeight:700, fontSize:14, color:"#92400E", margin:"0 0 8px" }}>🔑 Set up Claude API Key</p>
+          <p style={{ fontSize:13, color:"#78350F", margin:"0 0 12px", lineHeight:1.5 }}>
+            Get your free API key at <a href="https://console.anthropic.com" target="_blank" rel="noreferrer" style={{ color:"#4F46E5" }}>console.anthropic.com</a>. 
+            It's stored securely in your Supabase database.
+          </p>
+          <div style={{ display:"flex", gap:8 }}>
+            <input value={keyInput} onChange={e=>setKeyInput(e.target.value)} placeholder="sk-ant-api03-..." style={{ ...styles.input, flex:1, fontFamily:"monospace", fontSize:12 }} type="password" />
+            <button onClick={saveKey} disabled={savingKey||!keyInput} style={styles.btnPrimary}>{savingKey?"Saving…":"Save Key"}</button>
+          </div>
+        </div>
+      )}
+
+      {apiKey && !result && (
+        <div style={{ ...styles.card, textAlign:"center", padding:"50px 24px" }}>
+          <div style={{ fontSize:52, marginBottom:16 }}>✦</div>
+          <p style={{ fontSize:22, fontWeight:800, color:"#111827", margin:"0 0 8px" }}>Harvard-Grade Strategic Analysis</p>
+          <p style={{ fontSize:14, color:"#6B7280", margin:"0 0 28px", lineHeight:1.6, maxWidth:420, marginLeft:"auto", marginRight:"auto" }}>
+            Board-level analysis of all {entries.length} transactions across 3 businesses and 3 bank accounts. Health score, burn rate, runway, key risks, and a 90-day growth plan.
+          </p>
+          {error && <p style={{ color:"#EF4444", fontSize:14, marginBottom:16 }}>{error}</p>}
+          {loading ? (
+            <div>
+              <div style={{ display:"flex", justifyContent:"center", marginBottom:16 }}>
+                <div style={{ width:48, height:48, border:"4px solid #E5E7EB", borderTop:"4px solid #4F46E5", borderRadius:"50%", animation:"spin 1s linear infinite" }} />
+              </div>
+              <p style={{ color:"#6B7280", fontSize:14 }}>{msgs[0]}</p>
+            </div>
+          ) : (
+            <button onClick={generate} style={{ ...styles.btnPrimary, padding:"14px 36px", fontSize:16 }}>
+              ✦ Generate Strategic Analysis
+            </button>
+          )}
+          {/* API key update */}
+          <div style={{ marginTop:24, display:"flex", gap:8, maxWidth:400, margin:"24px auto 0" }}>
+            <input value={keyInput} onChange={e=>setKeyInput(e.target.value)} placeholder="Update Claude API key…" style={{ ...styles.input, flex:1, fontSize:12, fontFamily:"monospace" }} type="password" />
+            <button onClick={saveKey} style={{ ...styles.btnGhost, fontSize:12 }}>Update</button>
+          </div>
+        </div>
+      )}
+
+      {result && (
+        <div>
+          {/* Health Score */}
+          <div style={{ ...styles.card, background:"linear-gradient(135deg,#1e1b4b,#312e81)", marginBottom:20, overflow:"hidden", position:"relative" }}>
+            <div style={{ display:"flex", alignItems:"center", gap:24, flexWrap:"wrap" }}>
+              <div style={{ position:"relative", flexShrink:0 }}>
+                <svg width={120} height={120} viewBox="0 0 120 120">
+                  <circle cx={60} cy={60} r={50} fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth={10} />
+                  <circle cx={60} cy={60} r={50} fill="none" stroke={scoreColor} strokeWidth={10}
+                    strokeDasharray={`${(result.score/100)*314} 314`} strokeLinecap="round"
+                    transform="rotate(-90 60 60)" style={{ transition:"stroke-dasharray 1s ease" }} />
+                  <text x={60} y={55} textAnchor="middle" fill="#fff" fontSize={28} fontWeight={800}>{result.score}</text>
+                  <text x={60} y={74} textAnchor="middle" fill="rgba(255,255,255,0.6)" fontSize={13}>/100</text>
+                </svg>
+              </div>
+              <div style={{ flex:1, minWidth:200 }}>
+                <p style={{ color:"rgba(255,255,255,0.6)", fontSize:12, fontWeight:700, textTransform:"uppercase", margin:"0 0 4px", letterSpacing:1 }}>Financial Health</p>
+                <p style={{ color:scoreColor, fontSize:28, fontWeight:900, margin:"0 0 6px" }}>{result.scoreLabel}</p>
+                <p style={{ color:"rgba(255,255,255,0.8)", fontSize:14, margin:0, lineHeight:1.5 }}>{result.headline}</p>
+              </div>
+              <div style={{ display:"flex", gap:12, flexWrap:"wrap" }}>
+                {[["Burn Rate",result.burnRate,"🔥"],["Runway",result.runway,"⏱"]].map(([l,v,icon])=>(
+                  <div key={l} style={{ padding:"14px 20px", background:"rgba(255,255,255,0.08)", borderRadius:12, textAlign:"center" }}>
+                    <div style={{ fontSize:20, marginBottom:4 }}>{icon}</div>
+                    <div style={{ color:"rgba(255,255,255,0.5)", fontSize:11, fontWeight:700, textTransform:"uppercase", letterSpacing:0.5 }}>{l}</div>
+                    <div style={{ color:"#fff", fontSize:18, fontWeight:700, marginTop:2 }}>{v}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            {/* Regenerate */}
+            <button onClick={generate} disabled={loading} style={{ position:"absolute", top:16, right:16, background:"rgba(255,255,255,0.12)", border:"none", borderRadius:8, padding:"6px 12px", color:"#fff", fontSize:12, cursor:"pointer" }}>
+              {loading?"…":"↻ Refresh"}
+            </button>
+          </div>
+
+          {/* Insights */}
+          <p style={{ ...styles.sectionTitle, marginBottom:12 }}>Key Insights</p>
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))", gap:12, marginBottom:20 }}>
+            {result.insights?.map((ins,i) => {
+              const colors = { warning:["#FFFBEB","#FDE68A","#92400E"], success:["#F0FDF4","#6EE7B7","#166534"], info:["#EFF6FF","#BFDBFE","#1e3a8a"] };
+              const [bg,bdr,txt] = colors[ins.type]||colors.info;
+              return (
+                <div key={i} style={{ background:bg, border:`1px solid ${bdr}`, borderRadius:12, padding:"14px 16px" }}>
+                  <p style={{ fontWeight:700, fontSize:14, color:txt, margin:"0 0 6px" }}>{ins.title}</p>
+                  <p style={{ fontSize:13, color:txt, margin:0, lineHeight:1.5, opacity:0.85 }}>{ins.body}</p>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Recommendations */}
+          <p style={{ ...styles.sectionTitle, marginBottom:12 }}>Action Items</p>
+          <div style={{ ...styles.card, marginBottom:20, padding:0, overflow:"hidden" }}>
+            {result.recommendations?.map((rec,i) => {
+              const pClr = { high:"#EF4444", medium:"#F59E0B", low:"#10B981" };
+              return (
+                <div key={i} style={{ display:"flex", gap:12, padding:"14px 16px", borderBottom:i<result.recommendations.length-1?"1px solid #F3F4F6":"none", alignItems:"flex-start" }}>
+                  <div style={{ flexShrink:0, width:8, height:8, borderRadius:"50%", background:pClr[rec.priority]||"#6B7280", marginTop:6 }} />
+                  <div style={{ flex:1 }}>
+                    <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:4 }}>
+                      <span style={{ fontWeight:700, fontSize:14, color:"#111827" }}>{rec.title}</span>
+                      <span style={{ ...styles.badge, fontSize:11 }}>{rec.tag}</span>
+                    </div>
+                    <p style={{ fontSize:13, color:"#4B5563", margin:0, lineHeight:1.5 }}>{rec.action}</p>
+                  </div>
+                  <span style={{ flexShrink:0, fontSize:11, fontWeight:700, color:pClr[rec.priority]||"#6B7280", textTransform:"uppercase" }}>{rec.priority}</span>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* 90-day plan */}
+          <p style={{ ...styles.sectionTitle, marginBottom:12 }}>90-Day Growth Plan</p>
+          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(220px,1fr))", gap:12 }}>
+            {result.plan?.map((step,i) => (
+              <div key={i} style={{ ...styles.card, borderLeft:`4px solid ${COLORS[i%COLORS.length]}`, paddingLeft:16 }}>
+                <p style={{ fontWeight:700, fontSize:13, color:COLORS[i%COLORS.length], margin:"0 0 6px" }}>{step.week}</p>
+                <p style={{ fontWeight:600, fontSize:14, color:"#111827", margin:"0 0 4px" }}>{step.action}</p>
+                <p style={{ fontSize:12, color:"#6B7280", margin:0, lineHeight:1.4 }}>🎯 {step.goal}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* CSS for spinner */}
+
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  SMALL REUSABLE COMPONENTS
+// ═══════════════════════════════════════════════════════════════════════════════
+function StatCard({ label, val, sub, color, bg, bdr }) {
+  return (
+    <div style={{ background:bg, borderRadius:14, border:`1px solid ${bdr}`, padding:"16px 18px" }}>
+      <p style={{ fontSize:11, fontWeight:700, color:"#6B7280", textTransform:"uppercase", letterSpacing:"0.7px", margin:"0 0 6px" }}>{label}</p>
+      <p style={{ fontSize:22, fontWeight:800, color, margin:"0 0 4px", lineHeight:1 }}>{val}</p>
+      <p style={{ fontSize:12, color:"#6B7280", margin:0 }}>{sub}</p>
+    </div>
+  );
+}
+
+function Pill({ label, active, color="#4F46E5", bg, onClick }) {
+  return (
+    <button onClick={onClick} style={{ padding:"6px 14px", borderRadius:20, fontSize:13, fontWeight:active?700:500, cursor:"pointer", border:active?`2px solid ${color}`:"1px solid #E5E7EB", background:active?(bg||color+"18"):"#fff", color:active?color:"#4B5563", whiteSpace:"nowrap" }}>
+      {label}
+    </button>
+  );
+}
+
+function Modal({ children, onClose, maxWidth=560 }) {
+  return (
+    <div style={styles.overlay} onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div style={{ background:"#fff", borderRadius:16, padding:24, width:"calc(100% - 32px)", maxWidth, maxHeight:"90vh", overflowY:"auto", boxShadow:"0 25px 60px rgba(0,0,0,0.2)" }}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function AddEntry({ onAdd, onClose }) {
+  const today = new Date().toISOString().split("T")[0];
+  const [d,   setD]   = useState(today);
+  const [biz, setBiz] = useState("Nutrolis");
+  const [acc, setAcc] = useState("lrf");
+  const [typ, setTyp] = useState("Income");
+  const [cat, setCat] = useState(INC_CATS[0]);
+  const [dsc, setDsc] = useState("");
+  const [amt, setAmt] = useState("");
+  const cats = typ==="Income"?INC_CATS:EXP_CATS;
+  const save = async () => {
+    if (!amt||!d||!dsc.trim()) return;
+    const e = { id:Date.now(), date:d, business:biz, account:acc, type:typ, category:cat, description:dsc, amount:parseFloat(amt) };
+    await dbAdd(e); onAdd(e);
+  };
+  return (
+    <Modal onClose={onClose}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:18 }}>
+        <p style={{ fontWeight:800, fontSize:16, margin:0 }}>+ New Transaction</p>
+        <button onClick={onClose} style={styles.closeBtn}>✕</button>
+      </div>
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+        {[["Date","date","date",d,setD],["Business","select","",biz,setBiz,BUSINESSES],["Account","select","",acc,setAcc],["Type","select","",typ,(v)=>{setTyp(v);setCat(v==="Income"?INC_CATS[0]:EXP_CATS[0])},["Income","Expense"]],["Category","select","",cat,setCat]].map(([lbl,t,tp,v,fn,opts])=>(
+          <div key={lbl}>
+            <label style={styles.formLabel}>{lbl}</label>
+            {t==="select"
+              ? <select style={styles.select} value={v} onChange={e=>fn(e.target.value)}>
+                  {(opts||(lbl==="Account"?ACCOUNTS.map(a=>({id:a.id,l:a.label})):lbl==="Category"?cats:[])).map(o=>typeof o==="string"?<option key={o}>{o}</option>:<option key={o.id||o} value={o.id||o}>{o.label||o.l||o}</option>)}
+                </select>
+              : <input type="date" style={styles.input} value={v} onChange={e=>fn(e.target.value)} />}
+          </div>
+        ))}
+        <div style={{ gridColumn:"span 2" }}>
+          <label style={styles.formLabel}>Description</label>
+          <input style={styles.input} value={dsc} onChange={e=>setDsc(e.target.value)} onKeyDown={e=>e.key==="Enter"&&save()} placeholder="e.g. Amazon payout week 1" />
+        </div>
+        <div>
+          <label style={styles.formLabel}>Amount ({acct(acc).cur==="GBP"?"£":"₹"})</label>
+          <input type="number" style={styles.input} value={amt} onChange={e=>setAmt(e.target.value)} onKeyDown={e=>e.key==="Enter"&&save()} placeholder="5000" />
+        </div>
+        <div style={{ display:"flex", alignItems:"flex-end" }}>
+          <button onClick={save} style={{ ...styles.btnPrimary, width:"100%" }}>Add Entry</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+function EditModal({ entry, onSave, onClose }) {
+  const [e, setE] = useState({...entry, amount:String(entry.amount)});
+  const cats = e.type==="Income"?INC_CATS:EXP_CATS;
+  const s = (k,v) => setE(p=>({...p,[k]:v}));
+  return (
+    <Modal onClose={onClose}>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:18 }}>
+        <p style={{ fontWeight:800, fontSize:16, margin:0 }}>Edit Entry</p>
+        <button onClick={onClose} style={styles.closeBtn}>✕</button>
+      </div>
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:16 }}>
+        <div><label style={styles.formLabel}>Date</label><input type="date" style={styles.input} value={e.date} onChange={ev=>s("date",ev.target.value)} /></div>
+        <div><label style={styles.formLabel}>Business</label><select style={styles.select} value={e.business} onChange={ev=>s("business",ev.target.value)}>{BUSINESSES.map(b=><option key={b}>{b}</option>)}</select></div>
+        <div><label style={styles.formLabel}>Account</label><select style={styles.select} value={e.account} onChange={ev=>s("account",ev.target.value)}>{ACCOUNTS.map(a=><option key={a.id} value={a.id}>{a.label}</option>)}</select></div>
+        <div><label style={styles.formLabel}>Type</label><select style={styles.select} value={e.type} onChange={ev=>{s("type",ev.target.value);s("category",ev.target.value==="Income"?INC_CATS[0]:EXP_CATS[0])}}><option>Income</option><option>Expense</option></select></div>
+        <div><label style={styles.formLabel}>Category</label><select style={styles.select} value={e.category} onChange={ev=>s("category",ev.target.value)}>{cats.map(c=><option key={c}>{c}</option>)}</select></div>
+        <div><label style={styles.formLabel}>Amount</label><input type="number" style={styles.input} value={e.amount} onChange={ev=>s("amount",ev.target.value)} /></div>
+        <div style={{ gridColumn:"span 2" }}><label style={styles.formLabel}>Description</label><input style={styles.input} value={e.description} onChange={ev=>s("description",ev.target.value)} /></div>
+      </div>
+      <div style={{ display:"flex", gap:8, justifyContent:"flex-end" }}>
+        <button onClick={onClose} style={styles.btnGhost}>Cancel</button>
+        <button onClick={()=>onSave({...e,amount:parseFloat(e.amount)})} style={styles.btnPrimary}>Save</button>
+      </div>
+    </Modal>
+  );
+}
+
+function ChannelModal({ ch, onSave, onClose }) {
+  const [d,setD] = useState(ch ? {...ch,cstr:(ch.cats||[]).join(", ")} : {name:"",biz:"Nutrolis",clr:"#6366F1",bg:"#EEF2FF",cstr:""});
+  return (
+    <Modal onClose={onClose} maxWidth={480}>
+      <p style={{ fontWeight:800, fontSize:16, margin:"0 0 18px" }}>{ch?"Edit":"Add"} Income Channel</p>
+      <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12, marginBottom:16 }}>
+        <div style={{ gridColumn:"span 2" }}><label style={styles.formLabel}>Name</label><input style={styles.input} value={d.name} onChange={e=>setD(p=>({...p,name:e.target.value}))} placeholder="e.g. Migrizo UK" /></div>
+        <div><label style={styles.formLabel}>Business</label><select style={styles.select} value={d.biz} onChange={e=>setD(p=>({...p,biz:e.target.value}))}>{BUSINESSES.map(b=><option key={b}>{b}</option>)}</select></div>
+        <div><label style={styles.formLabel}>Color</label><input type="color" value={d.clr} onChange={e=>setD(p=>({...p,clr:e.target.value}))} style={{ ...styles.input, padding:4, height:40 }} /></div>
+        <div style={{ gridColumn:"span 2" }}><label style={styles.formLabel}>Categories (comma-separated)</label><input style={styles.input} value={d.cstr} onChange={e=>setD(p=>({...p,cstr:e.target.value}))} placeholder="Amazon Revenue, Direct Sales" /><p style={{ fontSize:12,color:"#6B7280",marginTop:4 }}>Entry categories that count as revenue for this channel.</p></div>
+      </div>
+      <div style={{ display:"flex", gap:8, justifyContent:"flex-end" }}>
+        <button onClick={onClose} style={styles.btnGhost}>Cancel</button>
+        <button onClick={()=>onSave({...(ch||{}),id:(ch?.id||Date.now()),name:d.name,biz:d.biz,clr:d.clr,bg:d.bg||"#EEF2FF",cats:d.cstr.split(",").map(s=>s.trim()).filter(Boolean)})} style={styles.btnPrimary}>{ch?"Save":"Add Channel"}</button>
+      </div>
+    </Modal>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  DASHBOARD TAB
+// ═══════════════════════════════════════════════════════════════════════════════
+function DashboardTab({ entries, channels, fxRate }) {
+  const fe = useCallback(e=>fxAmt(e,fxRate),[fxRate]);
+  const inc   = useMemo(()=>entries.filter(e=>e.type==="Income").reduce((s,e)=>s+fe(e),0),[entries,fe]);
+  const exp   = useMemo(()=>entries.filter(e=>e.type==="Expense").reduce((s,e)=>s+fe(e),0),[entries,fe]);
+  const opRev = useMemo(()=>entries.filter(e=>e.type==="Income"&&OP_CATS.includes(e.category)).reduce((s,e)=>s+fe(e),0),[entries,fe]);
+  const loans = useMemo(()=>entries.filter(e=>["Business Loan Received","Investment / Loan Received"].includes(e.category)).reduce((s,e)=>s+fe(e),0),[entries,fe]);
+  const invest= useMemo(()=>entries.filter(e=>e.category==="Investment / Loan Received").reduce((s,e)=>s+fe(e),0),[entries,fe]);
+  const capital=useMemo(()=>entries.filter(e=>["Capital Injection"].includes(e.category)).reduce((s,e)=>s+fe(e),0),[entries,fe]);
+
+  const expCats = useMemo(()=>{
+    const m={};
+    entries.filter(e=>e.type==="Expense").forEach(e=>{m[e.category]=(m[e.category]||0)+fe(e);});
+    return Object.entries(m).map(([n,v])=>({name:n,value:v})).sort((a,b)=>b.value-a.value);
+  },[entries,fe]);
+
+  const monthly = useMemo(()=>
+    MONTHS.map((m,i)=>({
+      month:m,
+      inc:  entries.filter(e=>e.type==="Income"&&getMonth(e.date)===i).reduce((s,e)=>s+fe(e),0),
+      exp:  entries.filter(e=>e.type==="Expense"&&getMonth(e.date)===i).reduce((s,e)=>s+fe(e),0),
+      opR:  entries.filter(e=>e.type==="Income"&&OP_CATS.includes(e.category)&&getMonth(e.date)===i).reduce((s,e)=>s+fe(e),0),
+    })).filter(m=>m.inc>0||m.exp>0)
+  ,[entries,fe]);
+
+  const acctData = useMemo(()=>ACCOUNTS.map(a=>({
+    ...a,
+    inc: entries.filter(e=>e.type==="Income"&&e.account===a.id).reduce((s,e)=>s+e.amount,0),
+    exp: entries.filter(e=>e.type==="Expense"&&e.account===a.id).reduce((s,e)=>s+e.amount,0),
+    cnt: entries.filter(e=>e.account===a.id).length,
+  })),[entries]);
+
+  return (
+    <div>
+      {/* KPI Cards */}
+      <div className="ffd-grid-4" style={{ marginBottom:20 }}>
+        <StatCard label="Total Cash In"     val={fmt(inc)}   sub={`${entries.filter(e=>e.type==="Income").length} credits · all accounts`}    color="#059669" bg="#F0FDF4" bdr="#6EE7B7" />
+        <StatCard label="Total Cash Out"    val={fmt(exp)}   sub={`${entries.filter(e=>e.type==="Expense").length} debits · all accounts`}     color="#DC2626" bg="#FEF2F2" bdr="#FCA5A5" />
+        <StatCard label="Net Cash Flow"     val={fmt(inc-exp)}sub="All accounts combined (INR)"                                               color="#4338CA" bg="#EEF2FF" bdr="#A5B4FC" />
+        <StatCard label="Operating Revenue" val={fmt(opRev)} sub="Marketplace + Consulting + Assignment"                                      color="#B45309" bg="#FFFBEB" bdr="#FDE68A" />
+      </div>
+
+      {/* Account cards */}
+      <div className="ffd-grid-3" style={{ marginBottom:20 }}>
+        {acctData.map(a=>(
+          <div key={a.id} style={{ ...styles.card, border:`2px solid ${a.clr}30` }}>
+            <div style={{ display:"flex", justifyContent:"space-between", marginBottom:10 }}>
+              <span style={{ fontSize:14, fontWeight:700, color:a.clr }}>{a.label}</span>
+              <span style={{ ...styles.badge, background:a.cur==="GBP"?"#DBEAFE":"#DCFCE7", color:a.cur==="GBP"?"#1e3a8a":"#166534" }}>{a.cur}</span>
+            </div>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:6 }}>
+              {[["In",fmtCur(a.inc,a.cur),"#059669"],["Out",fmtCur(a.exp,a.cur),"#DC2626"],["Net",fmtCur(a.inc-a.exp,a.cur),a.clr]].map(([l,v,c])=>(
+                <div key={l}><p style={{ fontSize:11,color:"#6B7280",margin:"0 0 2px",fontWeight:600 }}>{l}</p><p style={{ fontSize:13,fontWeight:700,color:c,margin:0 }}>{v}</p></div>
+              ))}
+            </div>
+            <p style={{ fontSize:12,color:"#9CA3AF",margin:"8px 0 0" }}>{a.cnt} entries</p>
+          </div>
+        ))}
+      </div>
+
+      {/* Funding breakdown */}
+      <div style={{ ...styles.card, marginBottom:20, background:"#FAFAFA", border:"1px dashed #D1D5DB" }}>
+        <p style={{ fontSize:13,fontWeight:700,color:"#4B5563",margin:"0 0 12px" }}>FUNDING BREAKDOWN — Q1 2026</p>
+        <div className="ffd-grid-4">
+          {[["Business Loan (Hemlata)",fmt(loans),"#7C3AED","#F5F3FF","DEBT to repay"],["External Investment",fmt(invest),"#0891B2","#ECFEFF","Anurag+Mansi"],["Owner Capital (Shailen)",fmt(capital),"#059669","#F0FDF4","IFTs + Cash"],["Operating Revenue",fmt(opRev),"#B45309","#FFFBEB","All 3 businesses"]].map(([l,v,c,bg,s])=>(
+            <div key={l} style={{ background:bg, borderRadius:10, padding:"12px 14px" }}>
+              <p style={{ fontSize:11,fontWeight:700,color:"#6B7280",textTransform:"uppercase",letterSpacing:"0.5px",margin:"0 0 4px" }}>{l}</p>
+              <p style={{ fontSize:20,fontWeight:800,color:c,margin:"0 0 2px" }}>{v}</p>
+              <p style={{ fontSize:12,color:"#6B7280",margin:0 }}>{s}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Charts */}
+      <div className="ffd-grid-2" style={{ marginBottom:20 }}>
+        <div style={styles.card}>
+          <p style={styles.sectionTitle}>Monthly Cash Flow</p>
+          <ResponsiveContainer width="100%" height={200}>
+            <BarChart data={monthly} margin={{ top:5,right:5,left:-15,bottom:0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#F3F4F6" vertical={false} />
+              <XAxis dataKey="month" tick={{ fontSize:11, fill:"#6B7280" }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fontSize:10, fill:"#9CA3AF" }} tickFormatter={v=>fmtK(v)} axisLine={false} tickLine={false} />
+              <Tooltip formatter={v=>[fmt(v)]} contentStyle={{ fontSize:13,borderRadius:10,border:"1px solid #E5E7EB" }} />
+              <Legend wrapperStyle={{ fontSize:12 }} />
+              <Bar dataKey="inc" fill="#6EE7B7" radius={[4,4,0,0]} name="Income" />
+              <Bar dataKey="exp" fill="#FCA5A5" radius={[4,4,0,0]} name="Expense" />
+              <Bar dataKey="opR" fill="#FDE68A" radius={[4,4,0,0]} name="Op.Rev" />
+            </BarChart>
+          </ResponsiveContainer>
+        </div>
+        <div style={styles.card}>
+          <p style={styles.sectionTitle}>Expense Categories</p>
+          <ResponsiveContainer width="100%" height={180}>
+            <PieChart>
+              <Pie data={expCats.slice(0,8)} cx="50%" cy="50%" outerRadius={82} innerRadius={36} dataKey="value" stroke="none">
+                {expCats.slice(0,8).map((_,i)=><Cell key={i} fill={COLORS[i%COLORS.length]} />)}
+              </Pie>
+              <Tooltip formatter={v=>[fmt(v)]} contentStyle={{ fontSize:12,borderRadius:10,border:"1px solid #E5E7EB" }} />
+            </PieChart>
+          </ResponsiveContainer>
+          <div style={{ display:"flex", flexWrap:"wrap", gap:"4px 10px" }}>
+            {expCats.slice(0,8).map((e,i)=>(
+              <span key={e.name} style={{ fontSize:11,color:"#374151",display:"flex",alignItems:"center",gap:4 }}>
+                <span style={{ width:8,height:8,borderRadius:2,background:COLORS[i%COLORS.length],display:"inline-block" }} />{e.name}
+              </span>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Trend line */}
+      <div style={{ ...styles.card, marginBottom:20 }}>
+        <p style={styles.sectionTitle}>Monthly Trend — Income vs Expense vs Operating Revenue</p>
+        <ResponsiveContainer width="100%" height={220}>
+          <LineChart data={monthly} margin={{ top:5,right:10,left:-10,bottom:0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#F3F4F6" vertical={false} />
+            <XAxis dataKey="month" tick={{ fontSize:12,fill:"#6B7280" }} axisLine={false} tickLine={false} />
+            <YAxis tick={{ fontSize:11,fill:"#9CA3AF" }} tickFormatter={v=>fmtK(v)} axisLine={false} tickLine={false} />
+            <Tooltip formatter={v=>[fmt(v)]} contentStyle={{ fontSize:13,borderRadius:10,border:"1px solid #E5E7EB" }} />
+            <Legend wrapperStyle={{ fontSize:12 }} />
+            <Line type="monotone" dataKey="inc" stroke="#10B981" strokeWidth={2.5} dot={{ r:4,fill:"#10B981",stroke:"#fff",strokeWidth:2 }} name="Cash In" />
+            <Line type="monotone" dataKey="exp" stroke="#EF4444" strokeWidth={2.5} dot={{ r:4,fill:"#EF4444",stroke:"#fff",strokeWidth:2 }} name="Expense" />
+            <Line type="monotone" dataKey="opR" stroke="#F59E0B" strokeWidth={2} strokeDasharray="6 3" dot={{ r:3,fill:"#F59E0B",stroke:"#fff",strokeWidth:2 }} name="Op.Rev" />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+
+      {/* Tables */}
+      <div className="ffd-grid-2">
+        <div style={styles.card}>
+          <p style={styles.sectionTitle}>Expense Breakdown</p>
+          <div style={{ overflowX:"auto" }}>
+            <table style={{ width:"100%", borderCollapse:"collapse", minWidth:320 }}>
+              <thead><tr><th style={styles.th}>Category</th><th style={{ ...styles.th, textAlign:"right" }}>Amount</th><th style={{ ...styles.th, textAlign:"right" }}>Share</th></tr></thead>
+              <tbody>
+                {expCats.map((e,i)=>(
+                  <tr key={e.name} style={{ background:i%2===0?"#fff":"#FAFAFA" }}>
+                    <td style={{ ...styles.td, display:"flex", alignItems:"center", gap:8 }}>
+                      <span style={{ width:8,height:8,borderRadius:2,background:COLORS[i%COLORS.length],flexShrink:0,display:"inline-block" }} />{e.name}
+                    </td>
+                    <td style={{ ...styles.td, textAlign:"right", color:"#DC2626", fontWeight:700 }}>{fmt(e.value)}</td>
+                    <td style={{ ...styles.td, textAlign:"right" }}>
+                      <div style={{ display:"flex", alignItems:"center", gap:6, justifyContent:"flex-end" }}>
+                        <div style={{ width:40,height:5,borderRadius:4,background:"#F3F4F6",overflow:"hidden" }}><div style={{ width:pct(e.value,exp),height:"100%",background:COLORS[i%COLORS.length] }} /></div>
+                        <span style={{ fontSize:12,color:"#6B7280",minWidth:34 }}>{pct(e.value,exp)}</span>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div style={styles.card}>
+          <p style={styles.sectionTitle}>Monthly Summary</p>
+          <table style={{ width:"100%", borderCollapse:"collapse" }}>
+            <thead><tr><th style={styles.th}>Month</th><th style={{ ...styles.th, textAlign:"right" }}>In</th><th style={{ ...styles.th, textAlign:"right" }}>Out</th><th style={{ ...styles.th, textAlign:"right" }}>Net</th></tr></thead>
+            <tbody>
+              {monthly.map((m,i)=>{
+                const net=m.inc-m.exp;
+                return (
+                  <tr key={m.month} style={{ background:i%2===0?"#fff":"#FAFAFA" }}>
+                    <td style={{ ...styles.td, fontWeight:600 }}>{m.month}</td>
+                    <td style={{ ...styles.td, textAlign:"right", color:"#059669", fontWeight:700 }}>{fmt(m.inc)}</td>
+                    <td style={{ ...styles.td, textAlign:"right", color:"#DC2626", fontWeight:700 }}>{fmt(m.exp)}</td>
+                    <td style={{ ...styles.td, textAlign:"right" }}><span style={{ ...styles.badge, background:net>=0?"#DCFCE7":"#FEE2E2", color:net>=0?"#166534":"#7F1D1D" }}>{net>=0?"+":""}{fmt(net)}</span></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  ACCOUNTS TAB
+// ═══════════════════════════════════════════════════════════════════════════════
+function AccountsTab({ entries, fxRate, onEdit, onDelete, onImport }) {
+  const [acctId, setAcctId] = useState("lrf");
+  const rows = useMemo(()=>entries.filter(e=>e.account===acctId).sort((a,b)=>b.date.localeCompare(a.date)),[entries,acctId]);
+  const cur  = acct(acctId).cur;
+  const inc  = rows.filter(e=>e.type==="Income").reduce((s,e)=>s+e.amount,0);
+  const exp  = rows.filter(e=>e.type==="Expense").reduce((s,e)=>s+e.amount,0);
+  return (
+    <div>
+      <div style={{ display:"flex", gap:8, marginBottom:18, flexWrap:"wrap" }}>
+        {ACCOUNTS.map(a=>(
+          <button key={a.id} onClick={()=>setAcctId(a.id)} style={{ padding:"9px 18px", borderRadius:10, fontSize:13, fontWeight:acctId===a.id?700:500, cursor:"pointer", border:acctId===a.id?`2px solid ${a.clr}`:"1px solid #E5E7EB", background:acctId===a.id?a.clr+"18":"#fff", color:acctId===a.id?a.clr:"#4B5563" }}>
+            {a.label}{a.cur==="GBP"&&<span style={{ fontSize:12,color:"#6B7280",marginLeft:4 }}>£</span>}
+          </button>
+        ))}
+      </div>
+      <div className="ffd-grid-3" style={{ marginBottom:20 }}>
+        <StatCard label="Total In"    val={fmtCur(inc,cur)} sub=""        color="#059669" bg="#F0FDF4" bdr="#6EE7B7" />
+        <StatCard label="Total Out"   val={fmtCur(exp,cur)} sub=""        color="#DC2626" bg="#FEF2F2" bdr="#FCA5A5" />
+        <StatCard label="Net Balance" val={fmtCur(inc-exp,cur)} sub=""    color="#4338CA" bg="#EEF2FF" bdr="#A5B4FC" />
+      </div>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:14, flexWrap:"wrap", gap:8 }}>
+        <p style={{ ...styles.sectionTitle, margin:0 }}>{acct(acctId).label} — {rows.length} entries</p>
+        <button onClick={()=>onImport(acctId)} style={{ ...styles.btnPrimary, padding:"10px 16px", fontSize:13, display:"flex", alignItems:"center", gap:6 }}>
+          📥 Import Bank Statement
+        </button>
+      </div>
+      <div style={{ background:"#FFFBEB", border:"1px solid #FDE68A", borderRadius:10, padding:"10px 14px", fontSize:13, color:"#78350F", marginBottom:14 }}>
+        💡 Download CSV or Excel from your bank portal → click Import Bank Statement → columns auto-detected
+      </div>
+      <div style={{ ...styles.card, overflowX:"auto" }}>
+        <table style={{ width:"100%", borderCollapse:"collapse", minWidth:560 }}>
+          <thead>
+            <tr><th style={styles.th}>#</th><th style={styles.th}>Date</th><th style={styles.th}>Business</th><th style={styles.th}>Type</th><th style={styles.th}>Category</th><th style={styles.th}>Description</th><th style={{ ...styles.th, textAlign:"right" }}>Amt</th><th style={styles.th}/></tr>
+          </thead>
+          <tbody>
+            {rows.map((e,i)=>(
+              <tr key={e.id} style={{ background:i%2===0?"#fff":"#FAFAFA" }}>
+                <td style={{ ...styles.td, color:"#9CA3AF", fontSize:12 }}>—</td>
+                <td style={{ ...styles.td, whiteSpace:"nowrap", color:"#4B5563" }}>{new Date(e.date+"T12:00").toLocaleDateString("en-IN",{day:"2-digit",month:"short",year:"2-digit"})}</td>
+                <td style={styles.td}><span style={{ ...styles.badge, background:(BIZ_CLR[e.business]||"#64748B")+"22", color:BIZ_CLR[e.business]||"#64748B" }}>{e.business}</span></td>
+                <td style={styles.td}><span style={{ ...styles.badge, background:e.type==="Income"?"#DCFCE7":"#FEE2E2", color:e.type==="Income"?"#166534":"#7F1D1D" }}>{e.type}</span></td>
+                <td style={{ ...styles.td, fontSize:12 }}>{e.category}</td>
+                <td style={{ ...styles.td, maxWidth:180, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{e.description}</td>
+                <td style={{ ...styles.td, fontWeight:700, color:e.type==="Income"?"#059669":"#DC2626", textAlign:"right", whiteSpace:"nowrap" }}>{e.type==="Income"?"+":"-"}{cur==="GBP"?`£${e.amount.toLocaleString()}`:`₹${e.amount.toLocaleString("en-IN")}`}</td>
+                <td style={{ ...styles.td, whiteSpace:"nowrap" }}>
+                  <button onClick={()=>onEdit(e)} style={{ ...styles.smBtn, color:"#4F46E5", marginRight:4 }}>Edit</button>
+                  <button onClick={()=>onDelete(e.id)} style={{ ...styles.smBtn, color:"#EF4444", background:"#FEF2F2" }}>Del</button>
+                </td>
+              </tr>
+            ))}
+            {rows.length===0 && <tr><td colSpan={8} style={{ ...styles.td, textAlign:"center", padding:48, color:"#6B7280" }}>No entries yet. Import a bank statement or add manually.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  CHANNELS TAB
+// ═══════════════════════════════════════════════════════════════════════════════
+function ChannelsTab({ entries, channels, fxRate, onEditCh, onDelCh, onAddCh }) {
+  const fe = useCallback(e=>fxAmt(e,fxRate),[fxRate]);
+  const opRev = useMemo(()=>entries.filter(e=>e.type==="Income"&&OP_CATS.includes(e.category)).reduce((s,e)=>s+fe(e),0),[entries,fe]);
+  const chData = useMemo(()=>channels.map(ch=>({
+    ...ch, total:entries.filter(e=>e.type==="Income"&&ch.cats.includes(e.category)).reduce((s,e)=>s+fe(e),0),
+    count:entries.filter(e=>e.type==="Income"&&ch.cats.includes(e.category)).length,
+  })),[channels,entries,fe]);
+  const incCats = useMemo(()=>{
+    const m={};
+    entries.filter(e=>e.type==="Income").forEach(e=>{m[e.category]=(m[e.category]||0)+fe(e);});
+    return Object.entries(m).map(([n,v])=>({name:n,value:v})).sort((a,b)=>b.value-a.value);
+  },[entries,fe]);
+  return (
+    <div>
+      <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16, flexWrap:"wrap", gap:10 }}>
+        <div>
+          <p style={{ fontWeight:700, fontSize:16, margin:"0 0 2px", color:"#111827" }}>Income Channels</p>
+          <p style={{ fontSize:13, color:"#4B5563", margin:0 }}>Revenue by source · auto-totals from entry categories</p>
+        </div>
+        <button onClick={onAddCh} style={styles.btnPrimary}>+ Add Channel</button>
+      </div>
+      <div className="ffd-grid-4" style={{ marginBottom:24 }}>
+        {chData.map(ch=>(
+          <div key={ch.id} style={{ ...styles.card, borderTop:`3px solid ${ch.clr}`, background:ch.bg }}>
+            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"flex-start", marginBottom:8 }}>
+              <div>
+                <p style={{ fontWeight:700, fontSize:15, color:ch.clr, margin:"0 0 2px" }}>{ch.name}</p>
+                <span style={{ ...styles.badge, fontSize:11 }}>{ch.biz}</span>
+              </div>
+              <div style={{ display:"flex", gap:4 }}>
+                <button onClick={()=>onEditCh(ch)} style={{ ...styles.smBtn, color:"#4F46E5" }}>Edit</button>
+                <button onClick={()=>onDelCh(ch.id)} style={{ ...styles.smBtn, color:"#EF4444", background:"#FEF2F2" }}>Del</button>
+              </div>
+            </div>
+            <p style={{ fontSize:26, fontWeight:800, color:ch.clr, margin:"0 0 4px" }}>{fmt(ch.total)}</p>
+            <p style={{ fontSize:12, color:"#6B7280", margin:"0 0 8px" }}>{ch.count} transactions · {pct(ch.total,opRev)} of op. revenue</p>
+            <div style={{ display:"flex", flexWrap:"wrap", gap:4 }}>
+              {(ch.cats||[]).map(c=><span key={c} style={{ fontSize:11, background:"#fff", border:"1px solid #E5E7EB", borderRadius:12, padding:"2px 8px", color:"#4B5563" }}>{c}</span>)}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div style={styles.card}>
+        <p style={styles.sectionTitle}>Income by Category</p>
+        <table style={{ width:"100%", borderCollapse:"collapse" }}>
+          <thead><tr><th style={styles.th}>Category</th><th style={{ ...styles.th, textAlign:"right" }}>Total</th><th style={{ ...styles.th, textAlign:"center" }}>Type</th></tr></thead>
+          <tbody>
+            {incCats.map((c,i)=>{
+              const isOp=OP_CATS.includes(c.name), isCap=["Capital Injection","Business Loan Received","Investment / Loan Received"].includes(c.name);
+              return (
+                <tr key={c.name} style={{ background:i%2===0?"#fff":"#FAFAFA" }}>
+                  <td style={{ ...styles.td, display:"flex", alignItems:"center", gap:8 }}><span style={{ width:8,height:8,borderRadius:2,background:COLORS[i%COLORS.length],flexShrink:0 }} />{c.name}</td>
+                  <td style={{ ...styles.td, textAlign:"right", color:"#059669", fontWeight:700 }}>{fmt(c.value)}</td>
+                  <td style={{ ...styles.td, textAlign:"center" }}><span style={{ ...styles.badge, background:isOp?"#DCFCE7":isCap?"#DBEAFE":"#F3F4F6", color:isOp?"#166534":isCap?"#1e3a8a":"#374151" }}>{isOp?"Operating":isCap?"Capital/Loan":"Transfer"}</span></td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  ENTRIES TAB
+// ═══════════════════════════════════════════════════════════════════════════════
+function EntriesTab({ entries, fxRate, onEdit, onDelete }) {
+  const [bizF,  setBizF]  = useState("All");
+  const [typF,  setTypF]  = useState("All");
+  const [accF,  setAccF]  = useState("All");
+  const [yearF, setYearF] = useState("All");
+  const [monF,  setMonF]  = useState("All");
+  const fe = useCallback(e=>fxAmt(e,fxRate),[fxRate]);
+  const years = useMemo(()=>[...new Set(entries.map(e=>getYear(e.date)))].sort().reverse(),[entries]);
+  const rows  = useMemo(()=>entries.filter(e=>
+    (bizF==="All"||e.business===bizF)&&
+    (typF==="All"||e.type===typF)&&
+    (accF==="All"||e.account===accF)&&
+    (yearF==="All"||getYear(e.date)===yearF)&&
+    (monF==="All"||MONTHS[getMonth(e.date)]===monF)
+  ).sort((a,b)=>b.date.localeCompare(a.date)),[entries,bizF,typF,accF,yearF,monF]);
+  const totIn  = rows.filter(r=>r.type==="Income").reduce((s,e)=>s+fe(e),0);
+  const totOut = rows.filter(r=>r.type==="Expense").reduce((s,e)=>s+fe(e),0);
+  return (
+    <div>
+      {/* Filters */}
+      <div style={{ display:"flex", gap:7, marginBottom:10, alignItems:"center", flexWrap:"wrap" }}>
+        <span style={{ fontSize:13, fontWeight:600, color:"#374151" }}>Business:</span>
+        {["All",...BUSINESSES].map(b=><Pill key={b} label={b} active={bizF===b} color={BIZ_CLR[b]||"#4F46E5"} bg={(BIZ_CLR[b]||"#4F46E5")+"18"} onClick={()=>setBizF(b)} />)}
+        <div style={{ width:1, height:20, background:"#E5E7EB", margin:"0 4px" }} />
+        <span style={{ fontSize:13, fontWeight:600, color:"#374151" }}>Type:</span>
+        {["All","Income","Expense"].map(t=><Pill key={t} label={t} active={typF===t} color={t==="Income"?"#059669":t==="Expense"?"#DC2626":"#4F46E5"} onClick={()=>setTypF(t)} />)}
+      </div>
+      <div style={{ display:"flex", gap:7, marginBottom:14, alignItems:"center", flexWrap:"wrap" }}>
+        <span style={{ fontSize:13, fontWeight:600, color:"#374151" }}>Account:</span>
+        <Pill label="All" active={accF==="All"} onClick={()=>setAccF("All")} />
+        {ACCOUNTS.map(a=><Pill key={a.id} label={a.label} active={accF===a.id} color={a.clr} bg={a.clr+"18"} onClick={()=>setAccF(accF===a.id?"All":a.id)} />)}
+        <div style={{ width:1, height:20, background:"#E5E7EB", margin:"0 4px" }} />
+        <select value={yearF} onChange={e=>setYearF(e.target.value)} style={{ ...styles.select, width:"auto", padding:"6px 11px" }}>
+          <option value="All">All Years</option>
+          {years.map(y=><option key={y}>{y}</option>)}
+        </select>
+        <select value={monF} onChange={e=>setMonF(e.target.value)} style={{ ...styles.select, width:"auto", padding:"6px 11px" }}>
+          <option value="All">All Months</option>
+          {MONTHS.map(m=><option key={m}>{m}</option>)}
+        </select>
+        <span style={{ marginLeft:"auto", fontSize:13, color:"#4B5563", fontWeight:600, whiteSpace:"nowrap" }}>
+          {rows.length} entries · In: {fmt(totIn)} · Out: {fmt(totOut)}
+        </span>
+      </div>
+      <div style={{ ...styles.card, overflowX:"auto" }}>
+        <table style={{ width:"100%", borderCollapse:"collapse", minWidth:700 }}>
+          <thead>
+            <tr><th style={styles.th}>#</th><th style={styles.th}>Date</th><th style={styles.th}>Business</th><th style={styles.th}>Account</th><th style={styles.th}>Type</th><th style={styles.th}>Category</th><th style={styles.th}>Description</th><th style={{ ...styles.th, textAlign:"right" }}>Amount</th><th style={styles.th}/></tr>
+          </thead>
+          <tbody>
+            {rows.map((e,i)=>{
+              const a = acct(e.account);
+              return (
+                <tr key={e.id} style={{ background:i%2===0?"#fff":"#FAFAFA" }}>
+                  <td style={{ ...styles.td, color:"#9CA3AF", fontSize:12 }}>—</td>
+                  <td style={{ ...styles.td, whiteSpace:"nowrap", color:"#4B5563" }}>{new Date(e.date+"T12:00").toLocaleDateString("en-IN",{day:"2-digit",month:"short",year:"2-digit"})}</td>
+                  <td style={styles.td}><span style={{ ...styles.badge, background:(BIZ_CLR[e.business]||"#64748B")+"22", color:BIZ_CLR[e.business]||"#64748B" }}>{e.business}</span></td>
+                  <td style={styles.td}><span style={{ ...styles.badge, background:a.clr+"22", color:a.clr }}>{a.label}</span></td>
+                  <td style={styles.td}><span style={{ ...styles.badge, background:e.type==="Income"?"#DCFCE7":"#FEE2E2", color:e.type==="Income"?"#166534":"#7F1D1D" }}>{e.type}</span></td>
+                  <td style={{ ...styles.td, fontSize:12, maxWidth:120, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{e.category}</td>
+                  <td style={{ ...styles.td, maxWidth:180, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{e.description}</td>
+                  <td style={{ ...styles.td, fontWeight:700, color:e.type==="Income"?"#059669":"#DC2626", textAlign:"right", whiteSpace:"nowrap" }}>
+                    {e.type==="Income"?"+":"-"}{a.cur==="GBP"?`£${e.amount.toLocaleString()}`:`₹${e.amount.toLocaleString("en-IN")}`}
+                  </td>
+                  <td style={{ ...styles.td, whiteSpace:"nowrap" }}>
+                    <button onClick={()=>onEdit(e)} style={{ ...styles.smBtn, color:"#4F46E5", marginRight:4 }}>Edit</button>
+                    <button onClick={()=>onDelete(e.id)} style={{ ...styles.smBtn, color:"#EF4444", background:"#FEF2F2" }}>Del</button>
+                  </td>
+                </tr>
+              );
+            })}
+            {rows.length===0 && <tr><td colSpan={9} style={{ ...styles.td, textAlign:"center", padding:48, color:"#6B7280", fontSize:14 }}>No entries match the current filters.</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  STYLES
+// ═══════════════════════════════════════════════════════════════════════════════
+const styles = {
+  overlay:    { position:"fixed", inset:0, background:"rgba(0,0,0,0.55)", display:"flex", alignItems:"center", justifyContent:"center", zIndex:1000, padding:16, overflowY:"auto" },
+  card:       { background:"#fff", borderRadius:14, border:"1px solid #E5E7EB", padding:"16px 18px", marginBottom:0 },
+  sectionTitle:{ fontSize:15, fontWeight:700, color:"#111827", margin:"0 0 4px" },
+  th:         { padding:"10px 12px", textAlign:"left", fontSize:12, fontWeight:700, color:"#374151", textTransform:"uppercase", letterSpacing:"0.4px", background:"#F9FAFB", borderBottom:"1px solid #E5E7EB", whiteSpace:"nowrap" },
+  td:         { padding:"10px 12px", fontSize:13, color:"#374151", borderBottom:"1px solid #F3F4F6" },
+  badge:      { display:"inline-block", padding:"3px 8px", borderRadius:20, fontSize:12, fontWeight:600, background:"#F3F4F6", color:"#374151" },
+  btnPrimary: { background:"#4F46E5", color:"#fff", border:"none", borderRadius:9, padding:"10px 18px", fontSize:14, fontWeight:600, cursor:"pointer", whiteSpace:"nowrap" },
+  btnGhost:   { background:"#F3F4F6", color:"#374151", border:"none", borderRadius:9, padding:"10px 18px", fontSize:14, fontWeight:500, cursor:"pointer", whiteSpace:"nowrap" },
+  smBtn:      { padding:"4px 10px", fontSize:12, fontWeight:600, background:"#EEF2FF", border:"none", borderRadius:6, cursor:"pointer" },
+  closeBtn:   { background:"#F3F4F6", border:"none", borderRadius:8, padding:"6px 12px", cursor:"pointer", fontSize:14, color:"#374151" },
+  input:      { width:"100%", padding:"9px 11px", border:"1px solid #D1D5DB", borderRadius:8, fontSize:14, outline:"none", background:"#F9FAFB", color:"#111827", boxSizing:"border-box" },
+  select:     { width:"100%", padding:"9px 11px", border:"1px solid #D1D5DB", borderRadius:8, fontSize:14, outline:"none", background:"#F9FAFB", color:"#111827", boxSizing:"border-box", appearance:"auto" },
+  formLabel:  { fontSize:11, fontWeight:700, color:"#374151", textTransform:"uppercase", letterSpacing:"0.5px", display:"block", marginBottom:4 },
+  importModal:{ background:"#fff", borderRadius:16, width:"calc(100% - 32px)", maxWidth:860, maxHeight:"92vh", overflow:"hidden", display:"flex", flexDirection:"column", boxShadow:"0 25px 60px rgba(0,0,0,0.25)" },
+  importHeader:{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"16px 20px", borderBottom:"1px solid #E5E7EB" },
+  dropZone:   { border:"2px dashed #C7D2FE", borderRadius:16, padding:"40px 24px", textAlign:"center", cursor:"pointer", transition:"all 0.2s", background:"#F8F9FF" },
+  dropZoneActive:{ border:"2px dashed #4F46E5", background:"#EEF2FF", transform:"scale(1.01)" },
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  SEED DATA (original 205 transactions)
+// ═══════════════════════════════════════════════════════════════════════════════
+const SEED = [{id:1,date:"2026-01-01",business:"Nutrolis",type:"Income",category:"Internal Transfer",description:"IMPS - LiveRightFit LLP (Self)",amount:7000,account:"lrf"},{id:2,date:"2026-01-01",business:"Nutrolis",type:"Income",category:"Capital Injection",description:"IFT - Shailendra Kumar (Fund to Nutrolis)",amount:50000,account:"lrf"},{id:3,date:"2026-01-01",business:"Nutrolis",type:"Expense",category:"Meta Ads",description:"UPI - Facebook Ads",amount:10000,account:"lrf"},{id:4,date:"2026-01-01",business:"Nutrolis",type:"Income",category:"Direct Sales",description:"UPI - Kailash (Customer Payment)",amount:1400,account:"lrf"},{id:5,date:"2026-01-02",business:"Nutrolis",type:"Expense",category:"Credit Card Payment",description:"UPI - ICICI Credit Card Payment",amount:10000,account:"lrf"},{id:6,date:"2026-01-02",business:"Nutrolis",type:"Income",category:"Flipkart Revenue",description:"NEFT - Flipkart",amount:312.27,account:"lrf"},{id:7,date:"2026-01-02",business:"Nutrolis",type:"Income",category:"Flipkart Revenue",description:"NEFT - Flipkart",amount:1753.76,account:"lrf"},{id:8,date:"2026-01-02",business:"Nutrolis",type:"Expense",category:"Shipping",description:"UPI - Bigfoot Shiprocket",amount:2000,account:"lrf"},{id:10,date:"2026-01-03",business:"Nutrolis",type:"Income",category:"Amazon Revenue",description:"IMPS - Amazon Seller",amount:2138.76,account:"lrf"},{id:11,date:"2026-01-03",business:"Nutrolis",type:"Income",category:"Amazon Revenue",description:"NEFT - Amazon Seller",amount:2261.12,account:"lrf"},{id:12,date:"2026-01-03",business:"Nutrolis",type:"Income",category:"Direct Sales",description:"UPI - Sumit (Payment)",amount:1900,account:"lrf"},{id:13,date:"2026-01-04",business:"Nutrolis",type:"Expense",category:"Freelancer",description:"UPI - Akash Verma (Freelancer)",amount:2520,account:"lrf"},{id:14,date:"2026-01-04",business:"Nutrolis",type:"Expense",category:"Meta Ads",description:"UPI - Facebook Ads",amount:5000,account:"lrf"},{id:15,date:"2026-01-05",business:"Nutrolis",type:"Expense",category:"Shipping",description:"UPI - Rising Star (Courier)",amount:707,account:"lrf"},{id:16,date:"2026-01-05",business:"Nutrolis",type:"Income",category:"Flipkart Revenue",description:"NEFT - Flipkart Nodal",amount:710.55,account:"lrf"},{id:17,date:"2026-01-05",business:"Nutrolis",type:"Income",category:"Flipkart Revenue",description:"NEFT - Flipkart",amount:287.55,account:"lrf"},{id:18,date:"2026-01-05",business:"Nutrolis",type:"Expense",category:"Shipping",description:"UPI - Bigfoot Shiprocket",amount:2000,account:"lrf"},{id:19,date:"2026-01-05",business:"Nutrolis",type:"Income",category:"Capital Injection",description:"IFT - Shailendra Kumar (Business Funding)",amount:150000,account:"lrf"},{id:20,date:"2026-01-05",business:"Nutrolis",type:"Expense",category:"Procurement",description:"IMPS - Oribite Nutra Science (Omega Restock)",amount:75000,account:"lrf"},{id:22,date:"2026-01-06",business:"Nutrolis",type:"Expense",category:"Meta Ads",description:"UPI - Facebook Ads",amount:5000,account:"lrf"},{id:23,date:"2026-01-06",business:"Nutrolis",type:"Expense",category:"Professional Services",description:"UPI - Shashank (CA Fee)",amount:20000,account:"lrf"},{id:25,date:"2026-01-07",business:"Nutrolis",type:"Expense",category:"Credit Card Payment",description:"UPI - ICICI Credit Card Payment",amount:7000,account:"lrf"},{id:26,date:"2026-01-07",business:"Nutrolis",type:"Income",category:"Flipkart Revenue",description:"NEFT - Flipkart",amount:2281.35,account:"lrf"},{id:27,date:"2026-01-07",business:"Nutrolis",type:"Income",category:"Flipkart Revenue",description:"NEFT - Flipkart",amount:688.68,account:"lrf"},{id:28,date:"2026-01-07",business:"Nutrolis",type:"Expense",category:"Meta Ads",description:"UPI - Facebook Ads",amount:5000,account:"lrf"},{id:31,date:"2026-01-07",business:"Nutrolis",type:"Expense",category:"Salaries",description:"UPI - Mansi Behal (Salary)",amount:9667,account:"lrf"},{id:32,date:"2026-01-07",business:"Nutrolis",type:"Expense",category:"Loan / EMI",description:"UPI - Neelam B (Loan EMI)",amount:3750,account:"lrf"},{id:33,date:"2026-01-08",business:"Nutrolis",type:"Expense",category:"Freelancer",description:"UPI - Solanki (Marketing)",amount:5000,account:"lrf"},{id:36,date:"2026-01-08",business:"Nutrolis",type:"Expense",category:"Software",description:"UPI - Notion (Annual Plan)",amount:10416,account:"lrf"},{id:37,date:"2026-01-09",business:"Nutrolis",type:"Income",category:"Flipkart Revenue",description:"NEFT - Flipkart",amount:793.57,account:"lrf"},{id:38,date:"2026-01-09",business:"Nutrolis",type:"Income",category:"Flipkart Revenue",description:"NEFT - Flipkart",amount:1491.69,account:"lrf"},{id:39,date:"2026-01-10",business:"Nutrolis",type:"Income",category:"Amazon Revenue",description:"IMPS - Amazon Seller",amount:1485.7,account:"lrf"},{id:40,date:"2026-01-10",business:"Nutrolis",type:"Income",category:"Amazon Revenue",description:"NEFT - Amazon Seller",amount:1631.17,account:"lrf"},{id:41,date:"2026-01-12",business:"Nutrolis",type:"Income",category:"Flipkart Revenue",description:"NEFT - Flipkart",amount:928.79,account:"lrf"},{id:44,date:"2026-01-12",business:"Nutrolis",type:"Expense",category:"Meta Ads",description:"UPI - Meta Ads",amount:3000,account:"lrf"},{id:46,date:"2026-01-12",business:"Nutrolis",type:"Expense",category:"Meta Ads",description:"UPI - Facebook Ads",amount:5000,account:"lrf"},{id:48,date:"2026-01-13",business:"Nutrolis",type:"Expense",category:"Freelancer",description:"UPI - Ayushi J (Freelancer)",amount:12000,account:"lrf"},{id:50,date:"2026-01-14",business:"Nutrolis",type:"Income",category:"Flipkart Revenue",description:"NEFT - Flipkart",amount:1363.5,account:"lrf"},{id:51,date:"2026-01-14",business:"Nutrolis",type:"Income",category:"Flipkart Revenue",description:"NEFT - Flipkart",amount:919.42,account:"lrf"},{id:53,date:"2026-01-14",business:"Nutrolis",type:"Expense",category:"Meta Ads",description:"UPI - Facebook Ads",amount:5000,account:"lrf"},{id:54,date:"2026-01-14",business:"Nutrolis",type:"Expense",category:"Shipping",description:"UPI - XpressBees (Courier)",amount:2199,account:"lrf"},{id:55,date:"2026-01-14",business:"Nutrolis",type:"Expense",category:"Credit Card Payment",description:"UPI - ICICI Credit Card Payment",amount:10000,account:"lrf"},{id:57,date:"2026-01-15",business:"Nutrolis",type:"Expense",category:"Meta Ads",description:"UPI - Facebook Ads",amount:3000,account:"lrf"},{id:59,date:"2026-01-16",business:"Nutrolis",type:"Income",category:"Flipkart Revenue",description:"NEFT - Flipkart",amount:1735.36,account:"lrf"},{id:60,date:"2026-01-16",business:"Nutrolis",type:"Income",category:"Flipkart Revenue",description:"NEFT - Flipkart",amount:1382.25,account:"lrf"},{id:62,date:"2026-01-17",business:"Nutrolis",type:"Income",category:"Amazon Revenue",description:"IMPS - Amazon Seller",amount:5045.83,account:"lrf"},{id:63,date:"2026-01-19",business:"Nutrolis",type:"Income",category:"Flipkart Revenue",description:"NEFT - Flipkart",amount:1730.32,account:"lrf"},{id:64,date:"2026-01-19",business:"Nutrolis",type:"Income",category:"Flipkart Revenue",description:"NEFT - Flipkart",amount:1213.23,account:"lrf"},{id:66,date:"2026-01-20",business:"Nutrolis",type:"Expense",category:"Credit Card Payment",description:"UPI - ICICI Credit Card Payment",amount:10000,account:"lrf"},{id:70,date:"2026-01-21",business:"Nutrolis",type:"Income",category:"Capital Injection",description:"IFT - Shailendra Kumar (Funding)",amount:20000,account:"lrf"},{id:72,date:"2026-01-23",business:"Nutrolis",type:"Income",category:"Capital Injection",description:"CASH DEPOSIT BY SELF",amount:400000,account:"lrf"},{id:75,date:"2026-01-24",business:"Nutrolis",type:"Income",category:"Amazon Revenue",description:"IMPS - Amazon Seller",amount:2947.83,account:"lrf"},{id:76,date:"2026-01-24",business:"Nutrolis",type:"Income",category:"Amazon Revenue",description:"NEFT - Amazon Seller",amount:3571.94,account:"lrf"},{id:77,date:"2026-01-24",business:"Nutrolis",type:"Expense",category:"Meta Ads",description:"UPI - Facebook Ads",amount:3000,account:"lrf"},{id:80,date:"2026-01-27",business:"Nutrolis",type:"Expense",category:"Meta Ads",description:"UPI - Facebook Ads",amount:3000,account:"lrf"},{id:81,date:"2026-01-27",business:"Nutrolis",type:"Expense",category:"Salaries",description:"IMPS - Bhaskar Manish Jani (Salary)",amount:35000,account:"lrf"},{id:82,date:"2026-01-27",business:"Nutrolis",type:"Expense",category:"Owner Drawings",description:"IFT - Shailendra Kumar (Advance Salary)",amount:200000,account:"lrf"},{id:86,date:"2026-01-30",business:"Nutrolis",type:"Expense",category:"Meta Ads",description:"UPI - Meta Ads",amount:3000,account:"lrf"},{id:87,date:"2026-01-30",business:"Nutrolis",type:"Expense",category:"Software",description:"IFT - Business Card Yearly Cost",amount:4000,account:"lrf"},{id:88,date:"2026-01-31",business:"Nutrolis",type:"Income",category:"Amazon Revenue",description:"IMPS - Amazon Seller",amount:2911.36,account:"lrf"},{id:89,date:"2026-01-31",business:"Nutrolis",type:"Income",category:"Amazon Revenue",description:"NEFT - Amazon Seller",amount:8373.76,account:"lrf"},{id:90,date:"2026-01-31",business:"Nutrolis",type:"Expense",category:"Software",description:"UPI - Zoho (Subscription)",amount:685.04,account:"lrf"},{id:91,date:"2026-02-01",business:"Nutrolis",type:"Expense",category:"Shipping",description:"UPI - Bigfoot Shiprocket",amount:1500,account:"lrf"},{id:92,date:"2026-02-02",business:"Nutrolis",type:"Expense",category:"Salaries",description:"UPI - Mansi Behal (Salary)",amount:24000,account:"lrf"},{id:94,date:"2026-02-02",business:"Nutrolis",type:"Expense",category:"Procurement",description:"IMPS - Oribite Nutra Science (Omega Payment)",amount:40000,account:"lrf"},{id:96,date:"2026-02-02",business:"Nutrolis",type:"Expense",category:"Credit Card Payment",description:"UPI - ICICI Credit Card Payment",amount:10000,account:"lrf"},{id:97,date:"2026-02-03",business:"Nutrolis",type:"Expense",category:"Freelancer",description:"UPI - Solanki (Marketing)",amount:5000,account:"lrf"},{id:99,date:"2026-02-04",business:"Nutrolis",type:"Expense",category:"Meta Ads",description:"UPI - Meta Ads",amount:2000,account:"lrf"},{id:102,date:"2026-02-07",business:"Nutrolis",type:"Income",category:"Amazon Revenue",description:"IMPS - Amazon Seller",amount:1884.84,account:"lrf"},{id:103,date:"2026-02-07",business:"Nutrolis",type:"Expense",category:"Meta Ads",description:"UPI - Facebook Ads",amount:3000,account:"lrf"},{id:104,date:"2026-02-08",business:"Nutrolis",type:"Income",category:"Amazon Revenue",description:"NEFT - Amazon Seller",amount:886.73,account:"lrf"},{id:105,date:"2026-02-09",business:"Nutrolis",type:"Income",category:"Flipkart Revenue",description:"NEFT - Flipkart",amount:9044.93,account:"lrf"},{id:107,date:"2026-02-11",business:"Nutrolis",type:"Expense",category:"Inter-company Transfer",description:"IMPS - Grownmind (ShopEMI)",amount:23000,account:"lrf"},{id:109,date:"2026-02-13",business:"Nutrolis",type:"Income",category:"Flipkart Revenue",description:"NEFT - Flipkart",amount:2544.99,account:"lrf"},{id:111,date:"2026-02-14",business:"Nutrolis",type:"Income",category:"Amazon Revenue",description:"NEFT - Amazon Seller",amount:5104.35,account:"lrf"},{id:112,date:"2026-02-14",business:"Nutrolis",type:"Expense",category:"Salaries",description:"UPI - Mansi Behal (Salary)",amount:9667,account:"lrf"},{id:113,date:"2026-02-15",business:"Nutrolis",type:"Expense",category:"Software",description:"UPI - Zoho (Subscription)",amount:2124,account:"lrf"},{id:115,date:"2026-02-16",business:"Nutrolis",type:"Income",category:"Flipkart Revenue",description:"NEFT - Flipkart",amount:1753.02,account:"lrf"},{id:117,date:"2026-02-18",business:"Nutrolis",type:"Income",category:"Flipkart Revenue",description:"NEFT - Flipkart",amount:1228.4,account:"lrf"},{id:118,date:"2026-02-18",business:"Nutrolis",type:"Income",category:"Flipkart Revenue",description:"NEFT - Flipkart",amount:1881.61,account:"lrf"},{id:119,date:"2026-02-18",business:"Nutrolis",type:"Expense",category:"Credit Card Payment",description:"UPI - ICICI Credit Card Payment",amount:11360,account:"lrf"},{id:121,date:"2026-02-20",business:"Nutrolis",type:"Income",category:"Flipkart Revenue",description:"NEFT - Flipkart",amount:399.77,account:"lrf"},{id:123,date:"2026-02-21",business:"Nutrolis",type:"Income",category:"Amazon Revenue",description:"IMPS - Amazon Seller",amount:3790.21,account:"lrf"},{id:125,date:"2026-02-23",business:"Nutrolis",type:"Income",category:"Flipkart Revenue",description:"NEFT - Flipkart",amount:684.1,account:"lrf"},{id:126,date:"2026-02-23",business:"Nutrolis",type:"Income",category:"Flipkart Revenue",description:"NEFT - Flipkart",amount:2103,account:"lrf"},{id:127,date:"2026-02-24",business:"Nutrolis",type:"Income",category:"Internal Transfer",description:"IMPS - Grownmind (Own Account)",amount:35000,account:"lrf"},{id:129,date:"2026-02-26",business:"Nutrolis",type:"Expense",category:"Meta Ads",description:"UPI - Facebook Ads",amount:2500,account:"lrf"},{id:130,date:"2026-02-27",business:"Nutrolis",type:"Income",category:"Flipkart Revenue",description:"NEFT - Flipkart",amount:4259.43,account:"lrf"},{id:131,date:"2026-02-27",business:"Nutrolis",type:"Expense",category:"Salaries",description:"IMPS - Bhaskar Manish Jani (Salary)",amount:35000,account:"lrf"},{id:132,date:"2026-02-28",business:"Nutrolis",type:"Expense",category:"Credit Card Payment",description:"UPI - ICICI Credit Card Payment",amount:5000,account:"lrf"},{id:133,date:"2026-02-28",business:"Nutrolis",type:"Expense",category:"Meta Ads",description:"UPI - META Ads",amount:2500,account:"lrf"},{id:135,date:"2026-03-01",business:"Nutrolis",type:"Expense",category:"Shipping",description:"UPI - Bigfoot Shiprocket",amount:1000,account:"lrf"},{id:136,date:"2026-03-03",business:"Nutrolis",type:"Expense",category:"Meta Ads",description:"UPI - Facebook Ads",amount:2000,account:"lrf"},{id:137,date:"2026-03-03",business:"Nutrolis",type:"Income",category:"Internal Transfer",description:"IMPS - Grownmind (Own)",amount:15000,account:"lrf"},{id:138,date:"2026-03-04",business:"Nutrolis",type:"Expense",category:"Freelancer",description:"UPI - Sapna (Prateek - Staff)",amount:15000,account:"lrf"},{id:139,date:"2026-03-06",business:"Nutrolis",type:"Expense",category:"Meta Ads",description:"UPI - META Ads",amount:2500,account:"lrf"},{id:140,date:"2026-03-06",business:"Nutrolis",type:"Expense",category:"Credit Card Payment",description:"UPI - ICICI Credit Card Payment",amount:7000,account:"lrf"},{id:143,date:"2026-03-08",business:"Nutrolis",type:"Income",category:"Investment / Loan Received",description:"RTGS - Anurag Mankhand & Mansi Behal",amount:500000,account:"lrf"},{id:144,date:"2026-03-08",business:"Nutrolis",type:"Expense",category:"Freelancer",description:"UPI - Akash Verma (Freelancer)",amount:5580,account:"lrf"},{id:145,date:"2026-03-08",business:"Nutrolis",type:"Expense",category:"Freelancer",description:"UPI - Pinky (Nutrolis Payment)",amount:20000,account:"lrf"},{id:146,date:"2026-03-08",business:"Nutrolis",type:"Expense",category:"Equipment & Office",description:"UPI - Blue Star (Equipment/AC)",amount:43468,account:"lrf"},{id:147,date:"2026-03-08",business:"Nutrolis",type:"Expense",category:"Meta Ads",description:"UPI - META Ads",amount:2000,account:"lrf"},{id:148,date:"2026-03-09",business:"Nutrolis",type:"Income",category:"Flipkart Revenue",description:"NEFT - Flipkart",amount:3103.54,account:"lrf"},{id:149,date:"2026-03-09",business:"Nutrolis",type:"Expense",category:"Professional Services",description:"UPI - Shashank (CA Fee)",amount:16000,account:"lrf"},{id:151,date:"2026-03-09",business:"Nutrolis",type:"Expense",category:"Misc Expense",description:"UPI - Amjad A",amount:1788,account:"lrf"},{id:152,date:"2026-03-09",business:"Nutrolis",type:"Expense",category:"Inter-company Transfer",description:"IMPS - Grownmind (Return of Loan)",amount:200000,account:"lrf"},{id:153,date:"2026-03-11",business:"Nutrolis",type:"Income",category:"Flipkart Revenue",description:"NEFT - Flipkart",amount:336.33,account:"lrf"},{id:154,date:"2026-03-11",business:"Nutrolis",type:"Income",category:"Flipkart Revenue",description:"NEFT - Flipkart",amount:1470.62,account:"lrf"},{id:155,date:"2026-03-12",business:"Nutrolis",type:"Expense",category:"Credit Card Payment",description:"UPI - ICICI Credit Card Payment",amount:12000,account:"lrf"},{id:156,date:"2026-03-12",business:"Nutrolis",type:"Expense",category:"Credit Card Payment",description:"UPI - ICICI Credit Card Payment",amount:10000,account:"lrf"},{id:157,date:"2026-03-12",business:"Nutrolis",type:"Expense",category:"Meta Ads",description:"UPI - META Ads",amount:2000,account:"lrf"},{id:160,date:"2026-03-13",business:"Nutrolis",type:"Income",category:"Flipkart Revenue",description:"NEFT - Flipkart",amount:601.07,account:"lrf"},{id:161,date:"2026-03-13",business:"Nutrolis",type:"Income",category:"Flipkart Revenue",description:"NEFT - Flipkart",amount:431.78,account:"lrf"},{id:163,date:"2026-03-16",business:"Nutrolis",type:"Income",category:"Flipkart Revenue",description:"NEFT - Flipkart",amount:704.86,account:"lrf"},{id:164,date:"2026-03-16",business:"Nutrolis",type:"Income",category:"Flipkart Revenue",description:"NEFT - Flipkart",amount:642.83,account:"lrf"},{id:166,date:"2026-03-16",business:"Nutrolis",type:"Income",category:"Business Loan Received",description:"NEFT - Hemlata (GAUR CITY - Real Estate)",amount:1160000,account:"lrf"},{id:167,date:"2026-03-16",business:"Nutrolis",type:"Expense",category:"Software",description:"UPI - Zoho (Subscription)",amount:1145.2,account:"lrf"},{id:168,date:"2026-03-16",business:"Nutrolis",type:"Expense",category:"Credit Card Payment",description:"UPI - ICICI Credit Card Payment",amount:95403.64,account:"lrf"},{id:169,date:"2026-03-16",business:"Nutrolis",type:"Expense",category:"Credit Card Payment",description:"UPI - IDFC Credit Card Payment",amount:42693.89,account:"lrf"},{id:170,date:"2026-03-18",business:"Nutrolis",type:"Income",category:"Flipkart Revenue",description:"NEFT - Flipkart",amount:1704.56,account:"lrf"},{id:171,date:"2026-03-18",business:"Nutrolis",type:"Income",category:"Flipkart Revenue",description:"NEFT - Flipkart",amount:2175.19,account:"lrf"},{id:172,date:"2026-03-18",business:"Nutrolis",type:"Expense",category:"Credit Card Payment",description:"UPI - ICICI Credit Card Payment",amount:5000,account:"lrf"},{id:173,date:"2026-03-18",business:"Nutrolis",type:"Expense",category:"Shipping",description:"UPI - Bigfoot Shiprocket",amount:400,account:"lrf"},{id:174,date:"2026-03-18",business:"Nutrolis",type:"Expense",category:"Meta Ads",description:"UPI - Facebook Ads",amount:2000,account:"lrf"},{id:175,date:"2026-03-20",business:"Nutrolis",type:"Income",category:"Flipkart Revenue",description:"NEFT - Flipkart",amount:600.84,account:"lrf"},{id:177,date:"2026-03-20",business:"Nutrolis",type:"Income",category:"Flipkart Revenue",description:"NEFT - Flipkart Nodal",amount:651.17,account:"lrf"},{id:178,date:"2026-03-21",business:"Nutrolis",type:"Income",category:"Amazon Revenue",description:"NEFT - Amazon Seller",amount:3122.85,account:"lrf"},{id:179,date:"2026-03-22",business:"Nutrolis",type:"Expense",category:"Freelancer",description:"UPI - Sapna (Staff)",amount:15000,account:"lrf"},{id:180,date:"2026-03-23",business:"Nutrolis",type:"Income",category:"Flipkart Revenue",description:"NEFT - Flipkart",amount:937.79,account:"lrf"},{id:181,date:"2026-03-23",business:"Nutrolis",type:"Income",category:"Flipkart Revenue",description:"NEFT - Flipkart",amount:1470,account:"lrf"},{id:182,date:"2026-03-23",business:"Nutrolis",type:"Expense",category:"Meta Ads",description:"UPI - Facebook Ads",amount:2000,account:"lrf"},{id:184,date:"2026-03-23",business:"Nutrolis",type:"Expense",category:"Telecom & Internet",description:"UPI - Airtel (Mobile Bill)",amount:200.8,account:"lrf"},{id:185,date:"2026-03-24",business:"Nutrolis",type:"Expense",category:"Software",description:"UPI - GoDaddy (Domain)",amount:1617.4,account:"lrf"},{id:186,date:"2026-03-25",business:"Nutrolis",type:"Expense",category:"Software",description:"UPI - Tata Stars (Subscription)",amount:483,account:"lrf"},{id:188,date:"2026-03-25",business:"Nutrolis",type:"Expense",category:"Credit Card Payment",description:"UPI - ICICI Credit Card Payment",amount:20560.89,account:"lrf"},{id:189,date:"2026-03-26",business:"Nutrolis",type:"Expense",category:"Meta Ads",description:"UPI - Facebook Ads",amount:2000,account:"lrf"},{id:190,date:"2026-03-26",business:"Nutrolis",type:"Expense",category:"Equipment & Office",description:"UPI - Croma (Electronics Purchase)",amount:58110,account:"lrf"},{id:192,date:"2026-03-28",business:"Nutrolis",type:"Income",category:"Amazon Revenue",description:"IMPS - Amazon Seller",amount:312.44,account:"lrf"},{id:193,date:"2026-03-28",business:"Nutrolis",type:"Expense",category:"Salaries",description:"UPI - Bhaskar Manish Jani (Salary)",amount:35000,account:"lrf"},{id:194,date:"2026-03-29",business:"Nutrolis",type:"Expense",category:"Meta Ads",description:"UPI - Facebook Ads",amount:2000,account:"lrf"},{id:196,date:"2026-03-29",business:"Nutrolis",type:"Expense",category:"Food & Entertainment",description:"UPI - Chaayos (Food)",amount:481,account:"lrf"},{id:198,date:"2026-03-29",business:"Nutrolis",type:"Expense",category:"Misc Expense",description:"UPI - Jitendra (Payment)",amount:25000,account:"lrf"},{id:200,date:"2026-03-30",business:"Nutrolis",type:"Income",category:"Flipkart Revenue",description:"NEFT - Flipkart Nodal",amount:3490.96,account:"lrf"},{id:201,date:"2026-03-30",business:"Nutrolis",type:"Income",category:"Flipkart Revenue",description:"NEFT - Flipkart",amount:8531.64,account:"lrf"},{id:202,date:"2026-03-31",business:"Nutrolis",type:"Expense",category:"Freelancer",description:"UPI - Akash Verma (Freelancer)",amount:550,account:"lrf"},{id:203,date:"2026-03-31",business:"Nutrolis",type:"Expense",category:"Freelancer",description:"UPI - Vishakha (Staff Payment)",amount:14980,account:"lrf"},{id:205,date:"2026-03-31",business:"Nutrolis",type:"Expense",category:"Inter-company Transfer",description:"UPI - Grownmind (Transfer)",amount:20000,account:"lrf"}];
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  MAIN APP
+// ═══════════════════════════════════════════════════════════════════════════════
+export default function App() {
+  const [authed,   setAuthed]   = useState(false);
+  const [pwd,      setPwd]      = useState("");
+  const [pwdErr,   setPwdErr]   = useState(false);
+  const [loading,  setLoading]  = useState(false);
+  const [dbReady,  setDbReady]  = useState(false);
+  const [entries,  setEntries]  = useState([]);
+  const [channels, setChannels] = useState([]);
+  const [fxRate,   setFxRate]   = useState(107);
+  const [fxInput,  setFxInput]  = useState("107");
+  const [apiKey,   setApiKey]   = useState("");
+  const [tab,      setTab]      = useState("dashboard");
+  const [showAdd,  setShowAdd]  = useState(false);
+  const [editE,    setEditE]    = useState(null);
+  const [editCh,   setEditCh]   = useState(null);
+  const [showChModal,setShowChModal]= useState(false);
+  const [importAcct,setImportAcct]  = useState(null);
+  const [mobileMenuOpen,setMobileMenuOpen] = useState(false);
+
+  // ── Load data ──
+  useEffect(()=>{
+    if (!authed) return;
+    (async()=>{
+      setLoading(true);
+      try {
+        // Check if tables exist
+        const { error:chk } = await sb.from("ffd_entries").select("id").limit(1);
+        if (chk?.code==="42P01") { setDbReady(false); setLoading(false); return; }
+        setDbReady(true);
+        // Load entries
+        const { data:ents } = await sb.from("ffd_entries").select("*").order("date",{ascending:false});
+        if (ents?.length) setEntries(ents);
+        else {
+          const chunks=[];
+          for(let i=0;i<SEED.length;i+=50) chunks.push(SEED.slice(i,i+50));
+          for(const c of chunks) await sb.from("ffd_entries").insert(c);
+          setEntries(SEED);
+        }
+        // Load channels
+        const { data:chs } = await sb.from("ffd_channels").select("*").order("id");
+        if (chs?.length) setChannels(chs);
+        else {
+          await sb.from("ffd_channels").insert(DEFAULT_CHANNELS);
+          setChannels(DEFAULT_CHANNELS);
+        }
+        // Load settings
+        const { data:settings } = await sb.from("ffd_settings").select("key,value");
+        if (settings) {
+          const fx  = settings.find(s=>s.key==="fx");
+          const ck  = settings.find(s=>s.key==="claude_key");
+          if (fx?.value)  { setFxRate(fx.value); setFxInput(String(fx.value)); }
+          if (ck?.value)  setApiKey(ck.value);
+        }
+      } catch(e) { console.error(e); }
+      setLoading(false);
+    })();
+  },[authed]);
+
+  const netFlow = useMemo(()=>entries.reduce((s,e)=>s+(e.type==="Income"?1:-1)*fxAmt(e,fxRate),0),[entries,fxRate]);
+
+  // ── CRUD ──
+  const onAdd    = (e)  => setEntries(p=>[e,...p]);
+  const onEdit   = async(e)  => { await dbUpdate(e); setEntries(p=>p.map(r=>r.id===e.id?e:r)); setEditE(null); };
+  const onDelete = async(id) => { if(!confirm("Delete this entry?")) return; await dbDelete(id); setEntries(p=>p.filter(r=>r.id!==id)); };
+  const onSaveCh = async(ch) => { await dbAddChannel(ch); ch.id&&channels.find(c=>c.id===ch.id)?setChannels(p=>p.map(c=>c.id===ch.id?ch:c)):setChannels(p=>[...p,ch]); setEditCh(null); setShowChModal(false); };
+  const onDelCh  = async(id) => { if(!confirm("Delete channel?")) return; await dbDelChannel(id); setChannels(p=>p.filter(c=>c.id!==id)); };
+  const onImported = (rows) => { setEntries(p=>[...rows.map(r=>({id:r.id||Date.now(),date:r.date,business:r.business,account:r.account,type:r.type,category:r.category,description:r.description,amount:r.amount})),...p]); setImportAcct(null); };
+  const onFxBlur = async() => { const v=parseFloat(fxInput); if(v>0){setFxRate(v);await dbSetting("fx",v);}else setFxInput(String(fxRate)); };
+  const onSetApiKey = async(k) => { setApiKey(k); await dbSetting("claude_key",k); };
+
+  // ── Login ──
+  if (!authed) return (
+    <div style={{ minHeight:"100vh", display:"flex", alignItems:"center", justifyContent:"center", background:"linear-gradient(135deg,#667eea 0%,#764ba2 100%)", padding:16 }}>
+      <div style={{ background:"#fff", borderRadius:20, padding:40, width:"100%", maxWidth:380, boxShadow:"0 25px 60px rgba(0,0,0,0.2)", textAlign:"center" }}>
+        <div style={{ fontSize:48, marginBottom:12 }}>📊</div>
+        <p style={{ fontSize:24, fontWeight:800, color:"#111827", margin:"0 0 4px" }}>Founder Finance</p>
+        <p style={{ fontSize:14, color:"#6B7280", margin:"0 0 28px" }}>Private Dashboard</p>
+        <input type="password" placeholder="Password" value={pwd} onChange={e=>{setPwd(e.target.value);setPwdErr(false);}} onKeyDown={e=>e.key==="Enter"&&(pwd===APP_PWD?setAuthed(true):setPwdErr(true))} style={{ ...styles.input, textAlign:"center", letterSpacing:6, fontSize:16, marginBottom:8 }} autoFocus />
+        {pwdErr&&<p style={{ color:"#EF4444", fontSize:13, margin:"0 0 10px" }}>Incorrect password</p>}
+        <button onClick={()=>pwd===APP_PWD?setAuthed(true):setPwdErr(true)} style={{ ...styles.btnPrimary, width:"100%", padding:14, fontSize:15 }}>Unlock Dashboard</button>
+      </div>
+    </div>
+  );
+
+  // ── DB setup needed ──
+  if (!dbReady&&!loading) return (
+    <div style={{ minHeight:"100vh", display:"flex", alignItems:"center", justifyContent:"center", padding:24 }}>
+      <div style={{ maxWidth:560, background:"#fff", borderRadius:16, padding:32, boxShadow:"0 4px 30px rgba(0,0,0,0.1)" }}>
+        <p style={{ fontSize:20, fontWeight:800, color:"#111827", marginBottom:16 }}>⚙️ One-Time Supabase Setup</p>
+        <p style={{ color:"#4B5563", marginBottom:16 }}>Run this SQL in your Supabase dashboard → SQL Editor:</p>
+        <pre style={{ background:"#1e1b4b", color:"#e0e7ff", padding:16, borderRadius:10, fontSize:12, overflow:"auto", marginBottom:16 }}>{`CREATE TABLE IF NOT EXISTS ffd_entries (id bigint PRIMARY KEY, date text NOT NULL, business text NOT NULL, account text DEFAULT 'lrf', type text NOT NULL, category text NOT NULL, description text, amount numeric NOT NULL, source text DEFAULT 'manual', created_at timestamptz DEFAULT now());
+CREATE TABLE IF NOT EXISTS ffd_channels (id bigint PRIMARY KEY, name text NOT NULL, biz text, clr text DEFAULT '#6366F1', bg text DEFAULT '#EEF2FF', cats jsonb DEFAULT '[]', created_at timestamptz DEFAULT now());
+CREATE TABLE IF NOT EXISTS ffd_settings (key text PRIMARY KEY, value jsonb);
+ALTER TABLE ffd_entries  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ffd_channels ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ffd_settings ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "public_access" ON ffd_entries  FOR ALL TO anon USING (true) WITH CHECK (true);
+CREATE POLICY "public_access" ON ffd_channels FOR ALL TO anon USING (true) WITH CHECK (true);
+CREATE POLICY "public_access" ON ffd_settings FOR ALL TO anon USING (true) WITH CHECK (true);`}</pre>
+        <button onClick={()=>window.location.reload()} style={{ ...styles.btnPrimary, padding:"12px 24px" }}>Reload after running SQL</button>
+      </div>
+    </div>
+  );
+
+  // ── Loading ──
+  if (loading) return (
+    <div style={{ minHeight:"100vh", display:"flex", alignItems:"center", justifyContent:"center", flexDirection:"column", gap:16 }}>
+      <div style={{ width:48, height:48, border:"4px solid #E5E7EB", borderTop:"4px solid #4F46E5", borderRadius:"50%", animation:"spin 1s linear infinite" }} />
+      <p style={{ color:"#6B7280", fontSize:15 }}>Loading your financial data…</p>
+
+    </div>
+  );
+
+  const TABS = [["dashboard","📊 Dashboard"],["accounts","🏦 Accounts"],["channels","📈 Channels"],["entries",`📋 Entries (${entries.length})`],["ai","✦ AI Insights"]];
+
+  return (
+    <div style={{ minHeight:"100vh", background:"#F5F7FF", fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif", color:"#111827" }}>
+      <style>{`
+        @keyframes spin{to{transform:rotate(360deg)}}
+        .ffd-tabs{display:flex;overflow-x:auto;scrollbar-width:none;-ms-overflow-style:none;}
+        .ffd-tabs::-webkit-scrollbar{display:none;}
+        .ffd-grid-4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;}
+        .ffd-grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;}
+        .ffd-grid-2{display:grid;grid-template-columns:repeat(2,1fr);gap:16px;}
+        .ffd-bottom-nav{display:none;}
+        @media(max-width:1100px){.ffd-grid-4{grid-template-columns:repeat(2,1fr);}}
+        @media(max-width:768px){
+          .ffd-grid-4{grid-template-columns:repeat(2,1fr);}
+          .ffd-grid-3{grid-template-columns:repeat(2,1fr);}
+          .ffd-grid-2{grid-template-columns:1fr;}
+          .ffd-desktop-tabs{display:none!important;}
+          .ffd-bottom-nav{display:flex!important;}
+          .ffd-fx-label{display:none!important;}
+          .ffd-content{padding:16px 12px 80px!important;}
+        }
+        @media(max-width:480px){
+          .ffd-grid-4{grid-template-columns:1fr 1fr;}
+          .ffd-grid-3{grid-template-columns:1fr 1fr;}
+        }
+      `}</style>
+
+      {/* ── Top Bar ── */}
+      <div style={{ background:"#fff", borderBottom:"1px solid #E5E7EB", position:"sticky", top:0, zIndex:100 }}>
+        <div style={{ maxWidth:1440, margin:"0 auto", padding:"0 16px", display:"flex", alignItems:"center", gap:12, height:56 }}>
+          <div style={{ fontSize:26, flexShrink:0 }}>📊</div>
+          <div style={{ flex:1, minWidth:0 }}>
+            <p style={{ fontWeight:800, fontSize:15, margin:0, lineHeight:1 }}>Founder Finance</p>
+            <p style={{ fontSize:12, color:"#6B7280", margin:0 }}>{entries.length} entries · Net: <span style={{ color:netFlow>=0?"#059669":"#DC2626",fontWeight:700 }}>{fmt(netFlow)}</span></p>
+          </div>
+          <div style={{ display:"flex", alignItems:"center", gap:6, fontSize:13, color:"#6B7280", flexShrink:0 }}>
+            <span className="ffd-fx-label" style={{ fontSize:12 }}>GBP→INR:</span>
+            <input value={fxInput} onChange={e=>setFxInput(e.target.value)} onBlur={onFxBlur} style={{ width:60, padding:"4px 7px", border:"1px solid #BFDBFE", borderRadius:6, fontSize:13, outline:"none", background:"#EFF6FF", color:"#1D4ED8", fontWeight:600 }} />
+          </div>
+          <button onClick={()=>setShowAdd(true)} style={{ ...styles.btnPrimary, padding:"8px 14px", fontSize:13, flexShrink:0 }}>+ Add</button>
+        </div>
+
+        {/* ── Tab Nav (desktop + tablet) ── */}
+        <div className="ffd-tabs ffd-desktop-tabs" style={{ maxWidth:1440, margin:"0 auto", padding:"0 8px" }}>
+          {TABS.map(([id,lbl])=>(
+            <button key={id} onClick={()=>setTab(id)} style={{ padding:"11px 18px", fontSize:13, fontWeight:tab===id?700:500, color:tab===id?"#4F46E5":"#4B5563", border:"none", borderBottom:tab===id?"3px solid #4F46E5":"3px solid transparent", marginBottom:-1, background:"none", cursor:"pointer", whiteSpace:"nowrap", flexShrink:0 }}>
+              {lbl}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* ── Main Content ── */}
+      <div className="ffd-content" style={{ maxWidth:1440, margin:"0 auto", padding:"20px 20px 40px" }}>
+        {tab==="dashboard" && <DashboardTab entries={entries} channels={channels} fxRate={fxRate} />}
+        {tab==="accounts"  && <AccountsTab  entries={entries} fxRate={fxRate} onEdit={setEditE} onDelete={onDelete} onImport={setImportAcct} />}
+        {tab==="channels"  && <ChannelsTab  entries={entries} channels={channels} fxRate={fxRate} onEditCh={ch=>{setEditCh(ch);setShowChModal(true);}} onDelCh={onDelCh} onAddCh={()=>{setEditCh(null);setShowChModal(true);}} />}
+        {tab==="entries"   && <EntriesTab   entries={entries} fxRate={fxRate} onEdit={setEditE} onDelete={onDelete} />}
+        {tab==="ai"        && <AIInsightsTab entries={entries} channels={channels} fxRate={fxRate} apiKey={apiKey} onSetApiKey={onSetApiKey} />}
+      </div>
+
+      {/* ── Mobile Bottom Nav (hidden on desktop via CSS) ── */}
+      <div className="ffd-bottom-nav" style={{ position:"fixed", bottom:0, left:0, right:0, background:"#fff", borderTop:"1px solid #E5E7EB", zIndex:100, paddingBottom:"env(safe-area-inset-bottom)" }}>
+        {[["dashboard","📊","Home"],["accounts","🏦","Accounts"],["channels","📈","Revenue"],["entries","📋","Entries"],["ai","✦","AI"]].map(([id,icon,lbl])=>(
+          <button key={id} onClick={()=>setTab(id)} style={{ flex:1, padding:"8px 4px", background:"none", border:"none", cursor:"pointer", display:"flex", flexDirection:"column", alignItems:"center", gap:2, color:tab===id?"#4F46E5":"#9CA3AF" }}>
+            <span style={{ fontSize:18 }}>{icon}</span>
+            <span style={{ fontSize:10, fontWeight:tab===id?700:500 }}>{lbl}</span>
+          </button>
+        ))}
+      </div>
+
+      {/* ── Modals ── */}
+      {showAdd    && <AddEntry onAdd={e=>{onAdd(e);setShowAdd(false);}} onClose={()=>setShowAdd(false)} />}
+      {editE      && <EditModal entry={editE} onSave={onEdit} onClose={()=>setEditE(null)} />}
+      {showChModal&& <ChannelModal ch={editCh} onSave={onSaveCh} onClose={()=>{setShowChModal(false);setEditCh(null);}} />}
+      {importAcct && <SmartImport accountId={importAcct} entries={entries} onDone={onImported} onClose={()=>setImportAcct(null)} />}
+    </div>
+  );
+}
