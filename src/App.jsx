@@ -149,14 +149,27 @@ function detectCols(headers) {
   const map = { date:-1, desc:-1, debit:-1, credit:-1, amount:-1, balance:-1 };
   headers.forEach((h, i) => {
     const l = h.toLowerCase().trim();
-    if (map.date<0   && /date|dt$|txn.?date|value.?date|trans.?date/.test(l)) map.date=i;
-    if (map.desc<0   && /narrat|description|particulars?|remarks?|details?|reference/.test(l)) map.desc=i;
-    if (map.debit<0  && /debit|dr$|withdrawal|paid.?out|outflow/.test(l)) map.debit=i;
-    if (map.credit<0 && /credit|cr$|deposit|paid.?in|inflow/.test(l)) map.credit=i;
+    if (map.date<0   && /date|dt$|txn.?date|value.?date|trans.?date|posting/.test(l)) map.date=i;
+    if (map.desc<0   && /narrat|description|particulars?|remarks?|details?|reference|transaction/.test(l)) map.desc=i;
+    if (map.debit<0  && /debit|dr$|withdrawal|paid.?out|outflow|debit.?amount|withdraw/.test(l)) map.debit=i;
+    if (map.credit<0 && /credit|cr$|deposit|paid.?in|inflow|credit.?amount/.test(l)) map.credit=i;
     if (map.amount<0 && /^amount$|^amt$/.test(l)) map.amount=i;
     if (map.balance<0&& /balance|bal$/.test(l)) map.balance=i;
   });
   return map;
+}
+
+// Smart: find the real header row — skips junk rows at top (IDFC, ICICI, HDFC etc.)
+function findHeaderRow(allRows) {
+  const dateKw   = /date|dt$|txn.?date|value.?date|posting/i;
+  const amountKw = /debit|credit|amount|withdrawal|deposit|dr$|cr$/i;
+  for (let i = 0; i < Math.min(allRows.length, 20); i++) {
+    const row = allRows[i].map(c => String(c||"").trim());
+    const hasDate   = row.some(c => dateKw.test(c));
+    const hasAmount = row.some(c => amountKw.test(c));
+    if (hasDate && hasAmount) return i;
+  }
+  return 0; // fallback to first row
 }
 
 // ─── SUPABASE HELPERS ─────────────────────────────────────────────────────────
@@ -194,9 +207,10 @@ function SmartImport({ accountId, entries, onDone, onClose }) {
       r.onload = e => {
         const wb = XLSX.read(new Uint8Array(e.target.result), { type:"array" });
         const ws = wb.Sheets[wb.SheetNames[0]];
-        const data = XLSX.utils.sheet_to_json(ws, { header:1, defval:"", raw:false });
-        const headers = data[0].map(String);
-        const rows    = data.slice(1).map(r => r.map(String));
+        const allRows = XLSX.utils.sheet_to_json(ws, { header:1, defval:"", raw:false });
+        const hdrIdx  = findHeaderRow(allRows);
+        const headers = allRows[hdrIdx].map(c => String(c||"").trim());
+        const rows    = allRows.slice(hdrIdx+1).map(r => r.map(c => String(c||"").trim())).filter(r => r.some(c=>c!==""));
         const parsed  = { headers, rows, filename: file.name };
         setRawData(parsed);
         setColMap(detectCols(headers));
@@ -207,11 +221,15 @@ function SmartImport({ accountId, entries, onDone, onClose }) {
     } else {
       const r = new FileReader();
       r.onload = e => {
-        const parsed = parseCSV(e.target.result);
-        if (!parsed) { alert("Could not parse file."); setLoading(false); return; }
-        parsed.filename = file.name;
+        const raw = parseCSV(e.target.result);
+        if (!raw) { alert("Could not parse file."); setLoading(false); return; }
+        const allRows = [raw.headers, ...raw.rows];
+        const hdrIdx  = findHeaderRow(allRows);
+        const headers = allRows[hdrIdx];
+        const rows    = allRows.slice(hdrIdx+1).filter(r => r.some(c=>c!==""));
+        const parsed  = { headers, rows, filename: file.name };
         setRawData(parsed);
-        setColMap(detectCols(parsed.headers));
+        setColMap(detectCols(headers));
         setStep(2);
         setLoading(false);
       };
