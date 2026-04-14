@@ -106,19 +106,45 @@ const fmtK = (n) => {
 const pct = (v, t) => t > 0 ? Math.round(v/t*100) + "%" : "0%";
 
 function parseDate(s = "") {
+  if (!s) return null;
   s = s.toString().trim().replace(/['"` ]/g,"");
+  if (!s) return null;
+  const MO = {jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
   let m;
-  if ((m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/))) return `${m[3]}-${m[2].padStart(2,"0")}-${m[1].padStart(2,"0")}`;
-  if ((m = s.match(/^(\d{4})[\/\-](\d{2})[\/\-](\d{2})$/))) return s;
-  if ((m = s.match(/^(\d{1,2})\s+(\w{3})\s+(\d{4})$/i))) {
-    const mo = {jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
-    const n = mo[m[2].toLowerCase()];
+  // YYYY-MM-DD
+  if ((m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/))) return s;
+  // DD/MM/YYYY or DD-MM-YYYY (all numeric)
+  if ((m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})$/)))
+    return `${m[3]}-${m[2].padStart(2,"0")}-${m[1].padStart(2,"0")}`;
+  // DD-Mon-YYYY  e.g. 01-Apr-2026  ← IDFC format
+  if ((m = s.match(/^(\d{1,2})-([A-Za-z]{3})-(\d{4})$/i))) {
+    const n = MO[m[2].toLowerCase()];
     if (n) return `${m[3]}-${String(n).padStart(2,"0")}-${m[1].padStart(2,"0")}`;
   }
-  // Excel date serial
+  // DD/Mon/YYYY  e.g. 01/Apr/2026
+  if ((m = s.match(/^(\d{1,2})\/([A-Za-z]{3})\/(\d{4})$/i))) {
+    const n = MO[m[2].toLowerCase()];
+    if (n) return `${m[3]}-${String(n).padStart(2,"0")}-${m[1].padStart(2,"0")}`;
+  }
+  // DD Mon YYYY  e.g. 01 Apr 2026
+  if ((m = s.match(/^(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})$/i))) {
+    const n = MO[m[2].toLowerCase()];
+    if (n) return `${m[3]}-${String(n).padStart(2,"0")}-${m[1].padStart(2,"0")}`;
+  }
+  // DD-Mon-YY  e.g. 01-Apr-26
+  if ((m = s.match(/^(\d{1,2})-([A-Za-z]{3})-(\d{2})$/i))) {
+    const n = MO[m[2].toLowerCase()];
+    const yr = parseInt(m[3]) + (parseInt(m[3]) < 50 ? 2000 : 1900);
+    if (n) return `${yr}-${String(n).padStart(2,"0")}-${m[1].padStart(2,"0")}`;
+  }
+  // DD/MM/YY
+  if ((m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2})$/))) {
+    const yr = parseInt(m[3]) + (parseInt(m[3]) < 50 ? 2000 : 1900);
+    return `${yr}-${m[2].padStart(2,"0")}-${m[1].padStart(2,"0")}`;
+  }
+  // Excel serial
   if (/^\d{5}$/.test(s)) {
-    const d = XLSX.SSF.parse_date_code(parseInt(s));
-    if (d) return `${d.y}-${String(d.m).padStart(2,"0")}-${String(d.d).padStart(2,"0")}`;
+    try { const d = XLSX.SSF.parse_date_code(parseInt(s)); if (d) return `${d.y}-${String(d.m).padStart(2,"0")}-${String(d.d).padStart(2,"0")}`; } catch(e){}
   }
   return null;
 }
