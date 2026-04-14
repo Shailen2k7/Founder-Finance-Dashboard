@@ -151,18 +151,58 @@ function detectCols(headers) {
     const l = h.toLowerCase().trim().replace(/\s+/g," ");
     if (map.date<0   && /date/.test(l) && !/update|mandate/.test(l)) map.date=i;
     if (map.desc<0   && /narrat|remark|description|particular|detail|reference|transaction\s*remarks?/.test(l)) map.desc=i;
-    if (map.debit<0  && /debit|withdrawal|dr$|paid.?out|outflow/.test(l)) map.debit=i;
-    if (map.credit<0 && /credit|deposit|cr$|paid.?in|inflow/.test(l)) map.credit=i;
+    if (map.debit<0  && /debit|withdrawal|dr$|dr\s|paid.?out|outflow/.test(l)) map.debit=i;
+    if (map.credit<0 && /credit|deposit|cr$|cr\s|paid.?in|inflow/.test(l)) map.credit=i;
     if (map.amount<0 && /^(amount|amt)$/.test(l)) map.amount=i;
-    if (map.balance<0&& /balance|bal$/.test(l)) map.balance=i;
+    if (map.balance<0&& /balance|bal$|bal\s/.test(l)) map.balance=i;
   });
-  // fallback: if no debit/credit found, find numeric columns by header position
+  return map;
+}
+
+// Data-driven detection: scan actual data rows to figure out column roles
+// Works even when headers are missing/unrecognised
+function detectColsFromData(headers, dataRows) {
+  // Start with header-based detection
+  let map = detectCols(headers);
+  // Sample first 8 non-empty data rows
+  const sample = dataRows.filter(r=>r.some(c=>c!=="")).slice(0,8);
+  if (sample.length === 0) return map;
+  const numCols = headers.length;
+
+  // If date not found, find column where most cells parse as dates
+  if (map.date < 0) {
+    let best=-1, bestScore=0;
+    for (let c=0; c<numCols; c++) {
+      const score = sample.filter(r=>parseDate(r[c]||"")!==null).length;
+      if (score>bestScore){bestScore=score;best=c;}
+    }
+    if (bestScore>=2) map.date=best;
+  }
+
+  // If desc not found, find longest average text column (excluding date, numeric cols)
+  if (map.desc < 0) {
+    let best=-1, bestLen=0;
+    for (let c=0; c<numCols; c++) {
+      if (c===map.date||c===map.balance) continue;
+      const avgLen = sample.reduce((s,r)=>s+(r[c]||"").length,0)/sample.length;
+      if (avgLen>bestLen&&avgLen>5){bestLen=avgLen;best=c;}
+    }
+    if (best>=0) map.desc=best;
+  }
+
+  // If debit/credit not found, find numeric columns
   if (map.debit<0 && map.credit<0 && map.amount<0) {
-    headers.forEach((h,i) => {
-      if (i===map.date||i===map.desc||i===map.balance) return;
-      if (map.debit<0) map.debit=i;
-      else if (map.credit<0) map.credit=i;
-    });
+    const numericCols = [];
+    for (let c=0; c<numCols; c++) {
+      if (c===map.date||c===map.desc) continue;
+      // Count cells that are either empty or numeric
+      const valid = sample.filter(r=>{const v=(r[c]||"").replace(/[,₹£$\s]/g,"");return v===""||(!isNaN(parseFloat(v))&&parseFloat(v)>=0);}).length;
+      if (valid===sample.length) numericCols.push(c);
+    }
+    // Last numeric col is usually balance, earlier ones are debit/credit
+    if (numericCols.length>=3){map.debit=numericCols[numericCols.length-3];map.credit=numericCols[numericCols.length-2];map.balance=numericCols[numericCols.length-1];}
+    else if (numericCols.length===2){map.debit=numericCols[0];map.credit=numericCols[1];}
+    else if (numericCols.length===1){map.amount=numericCols[0];}
   }
   return map;
 }
@@ -223,8 +263,8 @@ function SmartImport({ accountId, entries, onDone, onClose }) {
     const hdrIdx  = findHeaderRow(allRows);
     const headers = (allRows[hdrIdx]||[]).map(c => String(c||"").trim());
     const dataRows= allRows.slice(hdrIdx+1).map(r=>(r||[]).map(c=>String(c||"").trim())).filter(r=>r.some(c=>c!==""));
-    const map     = detectCols(headers);
-    const detectedStr = `Auto-detected: ${headers[map.date]||"?"} | ${headers[map.desc]||"?"} | ${headers[map.debit]>=0?headers[map.debit]:"—"} / ${headers[map.credit]>=0?headers[map.credit]:"—"}`;
+    const map     = detectColsFromData(headers, dataRows);
+    const detectedStr = `Columns: Date=${headers[map.date]||"?"} | Desc=${headers[map.desc]||"?"} | Debit=${map.debit>=0?headers[map.debit]:"—"} | Credit=${map.credit>=0?headers[map.credit]:"—"}`;
     setDetected(detectedStr);
     const existSet = new Set(entries.map(e=>`${e.date}||${e.amount}||${(e.description||"").toLowerCase().slice(0,20)}`));
     const rows = dataRows.map((row,i)=>{
