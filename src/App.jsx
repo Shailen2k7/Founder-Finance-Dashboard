@@ -159,80 +159,76 @@ function detectCols(headers) {
   return map;
 }
 
-// Data-driven detection: scan actual data rows to figure out column roles
-// Works even when headers are missing/unrecognised
+// Combine header-based + data-driven column detection
 function detectColsFromData(headers, dataRows) {
-  // Start with header-based detection
   let map = detectCols(headers);
-  // Sample first 8 non-empty data rows
-  const sample = dataRows.filter(r=>r.some(c=>c!=="")).slice(0,8);
+  const sample = dataRows.filter(r=>r.some(c=>c!=="")).slice(0,10);
   if (sample.length === 0) return map;
-  const numCols = headers.length;
+  const nCols = Math.max(headers.length, ...sample.map(r=>r.length));
 
-  // If date not found, find column where most cells parse as dates
+  // Fill missing date col: find column where most values parse as dates
   if (map.date < 0) {
     let best=-1, bestScore=0;
-    for (let c=0; c<numCols; c++) {
-      const score = sample.filter(r=>parseDate(r[c]||"")!==null).length;
+    for (let c=0; c<nCols; c++) {
+      const score = sample.filter(r=>parseDate(String(r[c]||""))!==null).length;
       if (score>bestScore){bestScore=score;best=c;}
     }
     if (bestScore>=2) map.date=best;
   }
 
-  // If desc not found, find longest average text column (excluding date, numeric cols)
+  // Fill missing desc col: longest average text column (not date, not balance)
   if (map.desc < 0) {
     let best=-1, bestLen=0;
-    for (let c=0; c<numCols; c++) {
+    for (let c=0; c<nCols; c++) {
       if (c===map.date||c===map.balance) continue;
-      const avgLen = sample.reduce((s,r)=>s+(r[c]||"").length,0)/sample.length;
-      if (avgLen>bestLen&&avgLen>5){bestLen=avgLen;best=c;}
+      const avgLen = sample.reduce((s,r)=>s+String(r[c]||"").length,0)/sample.length;
+      if (avgLen>bestLen&&avgLen>8){bestLen=avgLen;best=c;}
     }
     if (best>=0) map.desc=best;
   }
 
-  // If debit/credit not found, find numeric columns
+  // Fill missing amount cols: find columns that are empty-or-numeric across all sample rows
   if (map.debit<0 && map.credit<0 && map.amount<0) {
-    const numericCols = [];
-    for (let c=0; c<numCols; c++) {
+    const numCols=[];
+    for (let c=0; c<nCols; c++) {
       if (c===map.date||c===map.desc) continue;
-      // Count cells that are either empty or numeric
-      const valid = sample.filter(r=>{const v=(r[c]||"").replace(/[,₹£$\s]/g,"");return v===""||(!isNaN(parseFloat(v))&&parseFloat(v)>=0);}).length;
-      if (valid===sample.length) numericCols.push(c);
+      const allEmptyOrNum = sample.every(r=>{
+        const v=String(r[c]||"").replace(/[,₹£$\s]/g,"");
+        return v===""||(!isNaN(parseFloat(v))&&isFinite(parseFloat(v)));
+      });
+      if (allEmptyOrNum) numCols.push(c);
     }
-    // Last numeric col is usually balance, earlier ones are debit/credit
-    if (numericCols.length>=3){map.debit=numericCols[numericCols.length-3];map.credit=numericCols[numericCols.length-2];map.balance=numericCols[numericCols.length-1];}
-    else if (numericCols.length===2){map.debit=numericCols[0];map.credit=numericCols[1];}
-    else if (numericCols.length===1){map.amount=numericCols[0];}
+    // Convention: last col = balance, second-last = credit, third-last = debit
+    if (numCols.length>=3){map.debit=numCols[numCols.length-3];map.credit=numCols[numCols.length-2];map.balance=numCols[numCols.length-1];}
+    else if (numCols.length===2){map.debit=numCols[0];map.credit=numCols[1];}
+    else if (numCols.length===1){map.amount=numCols[0];}
   }
   return map;
 }
 
-// Scan all rows to find the REAL header row — handles IDFC, ICICI, HDFC junk rows at top
+// Find the REAL header row — scans up to 50 rows, works for IDFC/ICICI/HDFC/any bank
 function findHeaderRow(allRows) {
-  const dateKw = /^(date|txn\.?date|value\.?date|posting\.?date|trans\.?date|dt)$/i;
-  const amtKw  = /^(debit|credit|dr|cr|withdrawal|deposit|debit.?amount|credit.?amount|amount|withdraw|paid.?in|paid.?out|outflow|inflow)$/i;
-  // Pass 1: look for row that has exact date + amount keyword cells
-  for (let i = 0; i < Math.min(allRows.length, 30); i++) {
-    const row = (allRows[i]||[]).map(c => String(c||"").trim());
-    const nonEmpty = row.filter(c=>c!=="");
-    if (nonEmpty.length < 2) continue;
-    if (row.some(c=>dateKw.test(c)) && row.some(c=>amtKw.test(c))) return i;
+  const limit = Math.min(allRows.length, 50);
+  // Pass 1: row contains a "date"-like word AND a "debit"/"credit"-like word
+  for (let i = 0; i < limit; i++) {
+    const row = (allRows[i]||[]).map(c=>String(c||"").toLowerCase().trim());
+    const hasDate = row.some(c => /date/.test(c) && !/update|mandate|birth/.test(c));
+    const hasAmt  = row.some(c => /debit|credit|withdrawal|deposit|amount/.test(c));
+    if (hasDate && hasAmt) return i;
   }
-  // Pass 2: relaxed — any row containing "date" AND ("debit" or "credit" or "amount")
-  for (let i = 0; i < Math.min(allRows.length, 30); i++) {
-    const row = (allRows[i]||[]).map(c => String(c||"").toLowerCase().trim());
-    const nonEmpty = row.filter(c=>c!=="");
-    if (nonEmpty.length < 2) continue;
-    if (row.some(c=>c.includes("date")) && row.some(c=>/debit|credit|amount|withdraw|deposit/.test(c))) return i;
+  // Pass 2: row contains "particular" or "narration" or "remarks" — common in Indian banks
+  for (let i = 0; i < limit; i++) {
+    const row = (allRows[i]||[]).map(c=>String(c||"").toLowerCase().trim());
+    if (row.some(c=>/particular|narration|narrat|remarks/.test(c)) && row.some(c=>/debit|credit|amount/.test(c))) return i;
   }
-  // Pass 3: find row with most non-numeric, non-empty cells (likely the header row)
-  let best=0, bestScore=0;
-  for (let i=0; i<Math.min(allRows.length,30); i++) {
-    const row=(allRows[i]||[]).map(c=>String(c||"").trim());
-    const score=row.filter(c=>c!==""&&isNaN(c.replace(/[,\/\-]/g,""))).length;
-    if (score>bestScore){bestScore=score;best=i;}
+  // Pass 3: find the row where actual date-like values START appearing in the NEXT row
+  for (let i = 0; i < limit - 1; i++) {
+    const nextRow = (allRows[i+1]||[]).map(c=>String(c||"").trim());
+    const hasDateVal = nextRow.some(c=>parseDate(c)!==null);
+    const hasNumVal  = nextRow.some(c=>!isNaN(parseFloat(c.replace(/[,₹\s]/g,""))) && parseFloat(c.replace(/[,₹\s]/g,""))>0);
+    if (hasDateVal && hasNumVal) return i; // row i is the header, i+1 is first data row
   }
-  return best;
+  return 0;
 }
 
 // ─── SUPABASE HELPERS ─────────────────────────────────────────────────────────
@@ -260,11 +256,12 @@ function SmartImport({ accountId, entries, onDone, onClose }) {
   const fileRef = useRef();
 
   const processRows = useCallback((allRows, filename) => {
+    // allRows are already string-converted — find real header row
     const hdrIdx  = findHeaderRow(allRows);
-    const headers = (allRows[hdrIdx]||[]).map(c => String(c||"").trim());
-    const dataRows= allRows.slice(hdrIdx+1).map(r=>(r||[]).map(c=>String(c||"").trim())).filter(r=>r.some(c=>c!==""));
+    const headers = (allRows[hdrIdx]||[]);
+    const dataRows= allRows.slice(hdrIdx+1).filter(r=>r.some(c=>c!==""));
     const map     = detectColsFromData(headers, dataRows);
-    const detectedStr = `Columns: Date=${headers[map.date]||"?"} | Desc=${headers[map.desc]||"?"} | Debit=${map.debit>=0?headers[map.debit]:"—"} | Credit=${map.credit>=0?headers[map.credit]:"—"}`;
+    const detectedStr = `Found ${dataRows.length} rows · Date col: ${headers[map.date]||"auto"} | Debit/Credit auto-detected`;
     setDetected(detectedStr);
     const existSet = new Set(entries.map(e=>`${e.date}||${e.amount}||${(e.description||"").toLowerCase().slice(0,20)}`));
     const rows = dataRows.map((row,i)=>{
