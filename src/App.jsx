@@ -3,13 +3,17 @@
 //  Smart Bank Import · Claude AI Insights · Mobile-First
 // ══════════════════════════════════════════════════════════════════════════
 
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, createContext, useContext } from "react";
 import { createClient } from "@supabase/supabase-js";
 import {
   BarChart, Bar, LineChart, Line, PieChart, Pie, Cell,
   XAxis, YAxis, Tooltip, Legend, ResponsiveContainer, CartesianGrid,
 } from "recharts";
 import * as XLSX from "xlsx";
+
+// ─── MASK CONTEXT ─────────────────────────────────────────────────────────────
+const MaskCtx = createContext(false);
+const useMask = () => useContext(MaskCtx);
 
 // ─── CONFIG ──────────────────────────────────────────────────────────────────
 const SB_URL  = "https://wlghcxfrdbbbjldfepks.supabase.co";
@@ -70,6 +74,42 @@ const CAT_RULES = [
   { kw:["ficci"],                                               type:"Expense", cat:"Professional Services" },
 ];
 
+// ─── SELF-LEARNING TAG ENGINE ─────────────────────────────────────────────────
+let LEARNED_RULES = [];
+function applyLearnedTags(desc="", type="") {
+  const d = desc.toLowerCase();
+  for (const r of LEARNED_RULES) {
+    if (r.type===type && r.kw.some(k=>d.includes(k.toLowerCase())))
+      return { category:r.cat, business:r.biz||"Nutrolis" };
+  }
+  return null;
+}
+function learnRule(desc="", category="", type="", business="Nutrolis") {
+  const words = desc.toLowerCase()
+    .replace(/upi\/[a-z]+\/\d+\//gi,"").replace(/neft\/\w+\//gi,"").replace(/imps\/\w+\//gi,"")
+    .split(/[\/\-\s,]+/).map(w=>w.trim())
+    .filter(w=>w.length>3&&!/^\d+$/.test(w)&&!["sent","from","paid","debit","credit","bank","upi"].includes(w));
+  const kw=[...new Set(words)].slice(0,3);
+  if (kw.length===0) return;
+  const exists=LEARNED_RULES.find(r=>r.cat===category&&r.type===type&&r.kw.some(k=>kw.includes(k)));
+  if (!exists) LEARNED_RULES=[...LEARNED_RULES,{kw,cat:category,type,biz:business}];
+}
+
+// ─── EXPORT UTILITIES ────────────────────────────────────────────────────────
+const acctLabel = id => (ACCOUNTS.find(a=>a.id===id)||{label:id}).label;
+function exportCSV(rows, filename="export.csv") {
+  const header=["Date","Business","Account","Type","Category","Description","Amount"];
+  const lines=[header.join(","),...rows.map(r=>[r.date,r.business,acctLabel(r.account),r.type,r.category,`"${(r.description||"").replace(/"/g,"''")}"`  ,r.amount].join(","))];
+  const blob=new Blob([lines.join("\n")],{type:"text/csv"});
+  const a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=filename;a.click();
+}
+function exportXLSX(rows, filename="export.xlsx") {
+  const data=[["Date","Business","Account","Type","Category","Description","Amount"],...rows.map(r=>[r.date,r.business,acctLabel(r.account),r.type,r.category,r.description||"",r.amount])];
+  const ws=XLSX.utils.aoa_to_sheet(data);
+  const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,"Entries");
+  XLSX.writeFile(wb,filename);
+}
+
 function autoCategorize(desc = "", type = "") {
   const d = desc.toLowerCase();
   for (const rule of CAT_RULES) {
@@ -89,15 +129,19 @@ const fxAmt = (e, rate) => e.account === "jeet" ? e.amount * rate : e.amount;
 const getMonth = (d) => d ? parseInt(d.split("-")[1]) - 1 : -1;
 const getYear  = (d) => d ? d.split("-")[0] : "";
 
-const fmt = (n) => {
+const fmt = (n, masked=false) => {
+  if (masked) return "₹ ••••";
   const abs = Math.abs(n), pfx = n < 0 ? "-₹" : "₹";
   if (abs >= 1e5) return pfx + (abs/1e5).toFixed(2) + "L";
   return pfx + Math.round(abs).toLocaleString("en-IN");
 };
-const fmtCur = (n, cur) => cur === "GBP"
-  ? (n < 0 ? "-£" : "£") + Math.abs(n).toLocaleString("en-GB", { minimumFractionDigits:0 })
-  : fmt(n);
-const fmtK = (n) => {
+const fmtCur = (n, cur, masked=false) => {
+  if (masked) return cur==="GBP" ? "£ ••••" : "₹ ••••";
+  if (cur==="GBP") return (n<0?"-£":"£")+Math.abs(n).toLocaleString("en-GB",{minimumFractionDigits:0});
+  return fmt(n);
+};
+const fmtK = (n, masked=false) => {
+  if (masked) return "••••";
   const abs = Math.abs(n);
   if (abs >= 1e5) return (n < 0 ? "-₹" : "₹") + (abs/1e5).toFixed(1) + "L";
   if (abs >= 1e3) return (n < 0 ? "-₹" : "₹") + (abs/1e3).toFixed(0) + "k";
@@ -533,276 +577,189 @@ function SmartImport({ accountId, entries, onDone, onClose }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  AI INSIGHTS (CLAUDE-POWERED)
+//  AI CFO — 3 modes: Quick Check · Weekly Review · Monthly Analysis
 // ═══════════════════════════════════════════════════════════════════════════════
 function AIInsightsTab({ entries, channels, fxRate, apiKey, onSetApiKey }) {
-  const [loading,  setLoading]  = useState(false);
-  const [result,   setResult]   = useState(null);
-  const [error,    setError]    = useState(null);
-  const [keyInput, setKeyInput] = useState(apiKey || "");
-  const [savingKey,setSavingKey]= useState(false);
-  const [msgs,     setMsgs]     = useState([]);
+  const masked = useMask();
+  const [mode,setMode]       = useState("weekly");
+  const [loading,setLoading] = useState(false);
+  const [result,setResult]   = useState(null);
+  const [error,setError]     = useState(null);
+  const [keyInput,setKI]     = useState(apiKey||"");
+  const [saving,setSaving]   = useState(false);
+  const fe = useCallback(e=>fxAmt(e,fxRate),[fxRate]);
 
-  const fe = useCallback((e) => fxAmt(e, fxRate), [fxRate]);
-
-  // Build comprehensive prompt
-  const buildPrompt = useCallback(() => {
-    const incEntries = entries.filter(e=>e.type==="Income");
-    const expEntries = entries.filter(e=>e.type==="Expense");
-    const totalInc   = incEntries.reduce((s,e)=>s+fe(e),0);
-    const totalExp   = expEntries.reduce((s,e)=>s+fe(e),0);
-    const opRev      = incEntries.filter(e=>OP_CATS.includes(e.category)).reduce((s,e)=>s+fe(e),0);
-
-    // Monthly breakdown
-    const monthly = MONTHS.map((m,i)=>({
-      month:m,
-      inc:  incEntries.filter(e=>getMonth(e.date)===i).reduce((s,e)=>s+fe(e),0),
-      exp:  expEntries.filter(e=>getMonth(e.date)===i).reduce((s,e)=>s+fe(e),0),
-      opR:  incEntries.filter(e=>getMonth(e.date)===i&&OP_CATS.includes(e.category)).reduce((s,e)=>s+fe(e),0),
-    })).filter(m=>m.inc>0||m.exp>0);
-
-    // Expense categories
-    const expCats = {};
-    expEntries.forEach(e=>{ expCats[e.category]=(expCats[e.category]||0)+fe(e); });
-    const topExp = Object.entries(expCats).sort((a,b)=>b[1]-a[1]).slice(0,8)
-      .map(([k,v])=>`${k}: ₹${Math.round(v/1000)}k`).join(", ");
-
-    // Channel performance
-    const chanData = channels.map(ch=>({
-      name:ch.name,
-      rev: incEntries.filter(e=>ch.cats.includes(e.category)).reduce((s,e)=>s+fe(e),0)
-    })).filter(c=>c.rev>0).sort((a,b)=>b.rev-a.rev)
-      .map(c=>`${c.name}: ₹${Math.round(c.rev/1000)}k`).join(", ");
-
-    // Debt
-    const loans = incEntries.filter(e=>["Business Loan Received","Investment / Loan Received"].includes(e.category)).reduce((s,e)=>s+fe(e),0);
-
-    return `You are a sharp CFO-level advisor. Analyze this founder's finances and give SPECIFIC, ACTIONABLE advice.
-
-BUSINESS: LiveRightFit LLP (Nutrolis supplements + Migrizo UK immigration + Assignment consulting). Founder: Shailen, India-based.
-
-FINANCIAL DATA (INR, ${new Date().getFullYear()}):
-- Total Cash In: ₹${Math.round(totalInc/1000)}k | Total Expenses: ₹${Math.round(totalExp/1000)}k | Net: ₹${Math.round((totalInc-totalExp)/1000)}k
-- Operating Revenue (actual sales): ₹${Math.round(opRev/1000)}k (${Math.round(opRev/totalInc*100)}% of total inflow)
-- Total Loans/Investment Received: ₹${Math.round(loans/1000)}k (DEBT)
-- Monthly avg burn: ₹${Math.round(totalExp/monthly.length/1000)}k/month
-- Runway: ~${opRev>0?Math.round((totalInc-totalExp)/(totalExp/monthly.length)):0} months
-
-MONTHLY TREND:
-${monthly.map(m=>`${m.month}: In=₹${Math.round(m.inc/1000)}k, Exp=₹${Math.round(m.exp/1000)}k, OpRev=₹${Math.round(m.opR/1000)}k`).join("\n")}
-
-EXPENSE BREAKDOWN (top 8): ${topExp}
-REVENUE BY CHANNEL: ${chanData}
-
-Return ONLY valid JSON, no markdown, exactly this structure:
-{
-  "score": 62,
-  "scoreLabel": "Fair",
-  "scoreColor": "#F59E0B",
-  "burnRate": "₹X.XL/mo",
-  "runway": "X months",
-  "headline": "One punchy sentence about the business financial state",
-  "insights": [
-    {"title":"Title","body":"Specific finding with numbers","type":"warning"},
-    {"title":"Title","body":"Specific finding with numbers","type":"success"},
-    {"title":"Title","body":"Specific finding with numbers","type":"info"}
-  ],
-  "recommendations": [
-    {"title":"Action title","action":"Specific step to take this week","priority":"high","tag":"Revenue"},
-    {"title":"Action title","action":"Specific step to take this week","priority":"medium","tag":"Cost"},
-    {"title":"Action title","action":"Specific step to take this week","priority":"low","tag":"Strategy"}
-  ],
-  "plan": [
-    {"week":"Week 1-2","action":"Specific action","goal":"Measurable outcome"},
-    {"week":"Week 3-4","action":"Specific action","goal":"Measurable outcome"},
-    {"week":"Month 2","action":"Specific action","goal":"Measurable outcome"},
-    {"week":"Month 3","action":"Specific action","goal":"Measurable outcome"}
-  ]
-}`;
-  }, [entries, channels, fxRate, fe]);
-
-  const generate = async () => {
-    const key = keyInput.trim();
-    if (!key) { setError("Please enter your Claude API key first."); return; }
-    setLoading(true); setError(null); setResult(null);
-    const loadMsgs = [
-      "Analysing 226 transactions…",
-      "Calculating burn rate & runway…",
-      "Identifying revenue patterns…",
-      "Building strategic recommendations…",
-      "Finalising insights…"
-    ];
-    let mi = 0;
-    setMsgs([loadMsgs[mi]]);
-    const interval = setInterval(()=>{ mi=(mi+1)%loadMsgs.length; setMsgs([loadMsgs[mi]]); }, 2000);
-    try {
-      const prompt = buildPrompt();
-      const res = await fetch("https://api.anthropic.com/v1/messages", {
-        method:"POST",
-        headers:{
-          "Content-Type":"application/json",
-          "x-api-key": key,
-          "anthropic-version":"2023-06-01",
-          "anthropic-dangerous-direct-browser-access":"true"
-        },
-        body: JSON.stringify({
-          model:"claude-sonnet-4-5",
-          max_tokens:2048,
-          messages:[{ role:"user", content:prompt }]
-        })
-      });
-      if (!res.ok) { const e=await res.json(); throw new Error(e.error?.message||"API error"); }
-      const data = await res.json();
-      const text = data.content[0].text.replace(/```json\n?|```/g,"").trim();
-      setResult(JSON.parse(text));
-      if (key !== apiKey) { onSetApiKey(key); }
-    } catch(e) {
-      setError(e.message.includes("parse") ? "AI returned unexpected format, please try again." : e.message);
-    } finally { clearInterval(interval); setLoading(false); }
+  const MODES = {
+    quick:  {label:"⚡ Quick Check",      desc:"Daily 30-sec brief",         clr:"#059669"},
+    weekly: {label:"📊 Weekly Review",    desc:"Trends & what to focus on",  clr:"#4F46E5"},
+    monthly:{label:"🧠 Monthly Analysis", desc:"Full CFO strategic report",  clr:"#7C3AED"},
   };
 
-  const saveKey = async () => {
-    setSavingKey(true);
-    await dbSetting("claude_key", keyInput.trim());
-    onSetApiKey(keyInput.trim());
-    setSavingKey(false);
-  };
+  const buildPrompt = useCallback(()=>{
+    const inc   = entries.filter(e=>e.type==="Income").reduce((s,e)=>s+fe(e),0);
+    const exp   = entries.filter(e=>e.type==="Expense").reduce((s,e)=>s+fe(e),0);
+    const opRev = entries.filter(e=>e.type==="Income"&&OP_CATS.includes(e.category)).reduce((s,e)=>s+fe(e),0);
+    const loans = entries.filter(e=>["Business Loan Received","Investment / Loan Received"].includes(e.category)).reduce((s,e)=>s+fe(e),0);
+    const monthly=MONTHS.map((m,i)=>({month:m,inc:entries.filter(e=>e.type==="Income"&&getMonth(e.date)===i).reduce((s,e)=>s+fe(e),0),exp:entries.filter(e=>e.type==="Expense"&&getMonth(e.date)===i).reduce((s,e)=>s+fe(e),0)})).filter(m=>m.inc>0||m.exp>0);
+    const ec={}; entries.filter(e=>e.type==="Expense").forEach(e=>{ec[e.category]=(ec[e.category]||0)+fe(e);});
+    const topExp=Object.entries(ec).sort((a,b)=>b[1]-a[1]).slice(0,5).map(([k,v])=>`${k}:Rs${Math.round(v/1000)}k`).join(", ");
+    const base=`Founder:Shailen. Nutrolis(supplements D2C), Migrizo(UK immigration consulting), Assignment consulting.
+In=Rs${Math.round(inc/1000)}k|Exp=Rs${Math.round(exp/1000)}k|Net=Rs${Math.round((inc-exp)/1000)}k|OpRev=Rs${Math.round(opRev/1000)}k|Debt=Rs${Math.round(loans/1000)}k
+Monthly:${monthly.map(m=>`${m.month}(In:Rs${Math.round(m.inc/1000)}k,Exp:Rs${Math.round(m.exp/1000)}k)`).join(" ")}
+TopExp:${topExp}`;
+    if(mode==="quick") return `${base}
+CFO quick daily brief. SHORT. Return ONLY valid JSON no markdown:
+{"status":"green|yellow|red","headline":"under 10 words","focus":["point","point","point"],"watch":["risk","risk"],"win":"one positive"}`;
+    if(mode==="weekly") return `${base}
+CFO weekly review. Specific numbers. Return ONLY valid JSON:
+{"headline":"punchy","trend":"improving|stable|declining","highlights":["insight with #s","insight","insight"],"actions":["this week","this week","this week"],"metric":{"label":"key metric","value":"X","target":"Y"}}`;
+    return `${base}
+CFO monthly strategic analysis. Return ONLY valid JSON:
+{"score":72,"grade":"B+","headline":"one sentence","insights":[{"title":"t","body":"b with numbers","type":"warning|success|info"}],"recommendations":[{"title":"t","action":"specific step","priority":"high|medium|low"}],"plan":[{"week":"Week 1-2","action":"a","goal":"g"},{"week":"Month 2","action":"a","goal":"g"},{"week":"Month 3","action":"a","goal":"g"}]}`;
+  },[entries,fxRate,fe,mode]);
 
-  const scoreColor = result?.scoreColor || "#6B7280";
+  const generate=async()=>{
+    const key=keyInput.trim();
+    if(!key){setError("Please enter your Claude API key first.");return;}
+    setLoading(true);setError(null);setResult(null);
+    try{
+      const res=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json","x-api-key":key,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},body:JSON.stringify({model:"claude-sonnet-4-5",max_tokens:1500,messages:[{role:"user",content:buildPrompt()}]})});
+      if(!res.ok){const e=await res.json();throw new Error(e.error?.message||"API error");}
+      const data=await res.json();
+      const text=data.content[0].text.replace(/```json[\n]?|```/g,"").trim();
+      setResult({mode,data:JSON.parse(text)});
+      if(key!==apiKey)onSetApiKey(key);
+    }catch(e){setError(e.message.includes("parse")?"Unexpected format — try again.":e.message);}
+    finally{setLoading(false);}
+  };
+  const saveKey=async()=>{setSaving(true);await dbSetting("claude_key",keyInput.trim());onSetApiKey(keyInput.trim());setSaving(false);};
+
+  const sClr={green:"#059669",yellow:"#B45309",red:"#DC2626"};
+  const pClr={high:"#EF4444",medium:"#F59E0B",low:"#10B981"};
+  const iClr={warning:["#FFFBEB","#FDE68A","#92400E"],success:["#F0FDF4","#BBF7D0","#166534"],info:["#EFF6FF","#BFDBFE","#1e40af"]};
 
   return (
-    <div style={{ padding:"0 0 40px" }}>
-      {/* API Key setup */}
-      {!apiKey && (
-        <div style={{ background:"#FFFBEB", border:"1px solid #FDE68A", borderRadius:12, padding:16, marginBottom:20 }}>
-          <p style={{ fontWeight:700, fontSize:14, color:"#92400E", margin:"0 0 8px" }}>🔑 Set up Claude API Key</p>
-          <p style={{ fontSize:13, color:"#78350F", margin:"0 0 12px", lineHeight:1.5 }}>
-            Get your free API key at <a href="https://console.anthropic.com" target="_blank" rel="noreferrer" style={{ color:"#4F46E5" }}>console.anthropic.com</a>. 
-            It's stored securely in your Supabase database.
-          </p>
-          <div style={{ display:"flex", gap:8 }}>
-            <input value={keyInput} onChange={e=>setKeyInput(e.target.value)} placeholder="sk-ant-api03-..." style={{ ...styles.input, flex:1, fontFamily:"monospace", fontSize:12 }} type="password" />
-            <button onClick={saveKey} disabled={savingKey||!keyInput} style={styles.btnPrimary}>{savingKey?"Saving…":"Save Key"}</button>
+    <div style={{padding:"0 0 40px"}}>
+      {/* Mode selector */}
+      <div style={{display:"flex",gap:8,marginBottom:20,flexWrap:"wrap"}}>
+        {Object.entries(MODES).map(([k,v])=>(
+          <button key={k} onClick={()=>{setMode(k);setResult(null);}} style={{padding:"10px 18px",borderRadius:10,border:mode===k?`2px solid ${v.clr}`:"1px solid #E2E8F0",background:mode===k?v.clr+"18":"#fff",color:mode===k?v.clr:"#64748B",fontWeight:mode===k?700:500,cursor:"pointer",fontSize:13,textAlign:"left"}}>
+            <div>{v.label}</div><div style={{fontSize:11,opacity:0.65,marginTop:2}}>{v.desc}</div>
+          </button>
+        ))}
+      </div>
+
+      {!apiKey&&(
+        <div style={{background:"#FFFBEB",border:"1px solid #FDE68A",borderRadius:12,padding:16,marginBottom:20}}>
+          <p style={{fontWeight:700,fontSize:14,color:"#92400E",margin:"0 0 8px"}}>🔑 Enter Claude API Key</p>
+          <p style={{fontSize:13,color:"#78350F",margin:"0 0 12px"}}>Get free key at <a href="https://console.anthropic.com" target="_blank" rel="noreferrer" style={{color:"#4F46E5"}}>console.anthropic.com</a> → API Keys → Create Key</p>
+          <div style={{display:"flex",gap:8}}>
+            <input value={keyInput} onChange={e=>setKI(e.target.value)} placeholder="sk-ant-api03-…" style={{flex:1,padding:"9px 11px",border:"1px solid #CBD5E1",borderRadius:8,fontSize:12,outline:"none",background:"#F8FAFC",fontFamily:"monospace"}} type="password"/>
+            <button onClick={saveKey} disabled={saving||!keyInput} style={{padding:"9px 18px",background:"#4F46E5",color:"#fff",border:"none",borderRadius:8,fontSize:14,fontWeight:600,cursor:"pointer"}}>{saving?"Saving…":"Save Key"}</button>
           </div>
         </div>
       )}
 
-      {apiKey && !result && (
-        <div style={{ ...styles.card, textAlign:"center", padding:"50px 24px" }}>
-          <div style={{ fontSize:52, marginBottom:16 }}>✦</div>
-          <p style={{ fontSize:22, fontWeight:800, color:"#111827", margin:"0 0 8px" }}>Harvard-Grade Strategic Analysis</p>
-          <p style={{ fontSize:14, color:"#6B7280", margin:"0 0 28px", lineHeight:1.6, maxWidth:420, marginLeft:"auto", marginRight:"auto" }}>
-            Board-level analysis of all {entries.length} transactions across 3 businesses and 3 bank accounts. Health score, burn rate, runway, key risks, and a 90-day growth plan.
-          </p>
-          {error && <p style={{ color:"#EF4444", fontSize:14, marginBottom:16 }}>{error}</p>}
-          {loading ? (
-            <div>
-              <div style={{ display:"flex", justifyContent:"center", marginBottom:16 }}>
-                <div style={{ width:48, height:48, border:"4px solid #E5E7EB", borderTop:"4px solid #4F46E5", borderRadius:"50%", animation:"spin 1s linear infinite" }} />
-              </div>
-              <p style={{ color:"#6B7280", fontSize:14 }}>{msgs[0]}</p>
-            </div>
-          ) : (
-            <button onClick={generate} style={{ ...styles.btnPrimary, padding:"14px 36px", fontSize:16 }}>
-              ✦ Generate Strategic Analysis
+      {!result&&(
+        <div style={{background:"#fff",borderRadius:14,border:"1px solid #E2E8F0",padding:"50px 24px",textAlign:"center"}}>
+          <div style={{fontSize:44,marginBottom:16}}>{Object.values(MODES).find((_,i)=>Object.keys(MODES)[i]===mode)?.label.split(" ")[0]||"✦"}</div>
+          <p style={{fontSize:20,fontWeight:800,color:"#0F172A",margin:"0 0 8px"}}>{MODES[mode].label}</p>
+          <p style={{fontSize:14,color:"#64748B",margin:"0 0 28px",lineHeight:1.6,maxWidth:400,marginLeft:"auto",marginRight:"auto"}}>{MODES[mode].desc} · {entries.length} transactions across 3 businesses</p>
+          {error&&<p style={{color:"#EF4444",fontSize:13,marginBottom:16}}>{error}</p>}
+          {loading?(
+            <div><div style={{width:40,height:40,border:"4px solid #E2E8F0",borderTop:`4px solid ${MODES[mode].clr}`,borderRadius:"50%",animation:"spin 1s linear infinite",margin:"0 auto 12px"}}/><p style={{color:"#64748B",fontSize:14}}>Thinking like your CFO…</p></div>
+          ):(
+            <button onClick={generate} disabled={!apiKey&&!keyInput} style={{padding:"14px 36px",background:MODES[mode].clr,color:"#fff",border:"none",borderRadius:10,fontSize:15,fontWeight:700,cursor:"pointer"}}>
+              Generate {MODES[mode].label}
             </button>
           )}
-          {/* API key update */}
-          <div style={{ marginTop:24, display:"flex", gap:8, maxWidth:400, margin:"24px auto 0" }}>
-            <input value={keyInput} onChange={e=>setKeyInput(e.target.value)} placeholder="Update Claude API key…" style={{ ...styles.input, flex:1, fontSize:12, fontFamily:"monospace" }} type="password" />
-            <button onClick={saveKey} style={{ ...styles.btnGhost, fontSize:12 }}>Update</button>
-          </div>
+          {apiKey&&<div style={{marginTop:20,display:"flex",gap:8,maxWidth:380,margin:"20px auto 0"}}>
+            <input value={keyInput} onChange={e=>setKI(e.target.value)} placeholder="Update API key…" style={{flex:1,padding:"8px 10px",border:"1px solid #CBD5E1",borderRadius:8,fontSize:12,outline:"none",fontFamily:"monospace"}} type="password"/>
+            <button onClick={saveKey} style={{padding:"8px 14px",background:"#F1F5F9",border:"none",borderRadius:8,fontSize:12,cursor:"pointer"}}>Update</button>
+          </div>}
         </div>
       )}
 
-      {result && (
+      {result&&result.mode==="quick"&&(
         <div>
-          {/* Health Score */}
-          <div style={{ ...styles.card, background:"linear-gradient(135deg,#1e1b4b,#312e81)", marginBottom:20, overflow:"hidden", position:"relative" }}>
-            <div style={{ display:"flex", alignItems:"center", gap:24, flexWrap:"wrap" }}>
-              <div style={{ position:"relative", flexShrink:0 }}>
-                <svg width={120} height={120} viewBox="0 0 120 120">
-                  <circle cx={60} cy={60} r={50} fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth={10} />
-                  <circle cx={60} cy={60} r={50} fill="none" stroke={scoreColor} strokeWidth={10}
-                    strokeDasharray={`${(result.score/100)*314} 314`} strokeLinecap="round"
-                    transform="rotate(-90 60 60)" style={{ transition:"stroke-dasharray 1s ease" }} />
-                  <text x={60} y={55} textAnchor="middle" fill="#fff" fontSize={28} fontWeight={800}>{result.score}</text>
-                  <text x={60} y={74} textAnchor="middle" fill="rgba(255,255,255,0.6)" fontSize={13}>/100</text>
-                </svg>
-              </div>
-              <div style={{ flex:1, minWidth:200 }}>
-                <p style={{ color:"rgba(255,255,255,0.6)", fontSize:12, fontWeight:700, textTransform:"uppercase", margin:"0 0 4px", letterSpacing:1 }}>Financial Health</p>
-                <p style={{ color:scoreColor, fontSize:28, fontWeight:900, margin:"0 0 6px" }}>{result.scoreLabel}</p>
-                <p style={{ color:"rgba(255,255,255,0.8)", fontSize:14, margin:0, lineHeight:1.5 }}>{result.headline}</p>
-              </div>
-              <div style={{ display:"flex", gap:12, flexWrap:"wrap" }}>
-                {[["Burn Rate",result.burnRate,"🔥"],["Runway",result.runway,"⏱"]].map(([l,v,icon])=>(
-                  <div key={l} style={{ padding:"14px 20px", background:"rgba(255,255,255,0.08)", borderRadius:12, textAlign:"center" }}>
-                    <div style={{ fontSize:20, marginBottom:4 }}>{icon}</div>
-                    <div style={{ color:"rgba(255,255,255,0.5)", fontSize:11, fontWeight:700, textTransform:"uppercase", letterSpacing:0.5 }}>{l}</div>
-                    <div style={{ color:"#fff", fontSize:18, fontWeight:700, marginTop:2 }}>{v}</div>
-                  </div>
-                ))}
-              </div>
+          <div style={{background:sClr[result.data.status]+"12",border:`1px solid ${sClr[result.data.status]}40`,borderRadius:14,padding:"16px 18px",marginBottom:16,display:"flex",alignItems:"center",gap:12}}>
+            <span style={{fontSize:28}}>{result.data.status==="green"?"🟢":result.data.status==="yellow"?"🟡":"🔴"}</span>
+            <p style={{fontWeight:800,fontSize:17,color:"#0F172A",margin:0}}>{result.data.headline}</p>
+          </div>
+          {result.data.win&&<div style={{background:"#F0FDF4",border:"1px solid #BBF7D0",borderRadius:12,padding:"10px 14px",marginBottom:16,fontSize:13,color:"#166534",fontWeight:600}}>🏆 {result.data.win}</div>}
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:12,marginBottom:16}}>
+            <div style={{background:"#fff",borderRadius:14,border:"1px solid #E2E8F0",padding:"14px 16px"}}><p style={{fontWeight:700,color:"#166534",margin:"0 0 10px",fontSize:13}}>✅ Focus Today</p>{result.data.focus?.map((f,i)=><p key={i} style={{fontSize:13,color:"#374151",margin:"0 0 8px",paddingLeft:12,borderLeft:"3px solid #22C55E",lineHeight:1.4}}>→ {f}</p>)}</div>
+            <div style={{background:"#fff",borderRadius:14,border:"1px solid #E2E8F0",padding:"14px 16px"}}><p style={{fontWeight:700,color:"#7F1D1D",margin:"0 0 10px",fontSize:13}}>👀 Watch</p>{result.data.watch?.map((f,i)=><p key={i} style={{fontSize:13,color:"#374151",margin:"0 0 8px",paddingLeft:12,borderLeft:"3px solid #EF4444",lineHeight:1.4}}>⚠ {f}</p>)}</div>
+          </div>
+          <button onClick={()=>setResult(null)} style={{padding:"8px 18px",background:"#F1F5F9",border:"none",borderRadius:8,fontSize:13,cursor:"pointer",width:"100%"}}>↻ Regenerate</button>
+        </div>
+      )}
+
+      {result&&result.mode==="weekly"&&(
+        <div>
+          <div style={{background:result.data.trend==="improving"?"#F0FDF4":result.data.trend==="declining"?"#FFF1F2":"#F8FAFC",border:"1px solid #E2E8F0",borderRadius:14,padding:"14px 18px",marginBottom:16}}>
+            <p style={{fontWeight:800,fontSize:16,color:"#0F172A",margin:"0 0 6px"}}>{result.data.headline}</p>
+            <span style={{display:"inline-block",padding:"3px 10px",borderRadius:20,fontSize:12,fontWeight:600,background:result.data.trend==="improving"?"#DCFCE7":result.data.trend==="declining"?"#FEE2E2":"#EEF2FF",color:result.data.trend==="improving"?"#166534":result.data.trend==="declining"?"#7F1D1D":"#4F46E5"}}>
+              Trend: {result.data.trend}
+            </span>
+          </div>
+          {result.data.metric&&<div style={{background:"#fff",borderRadius:14,border:"1px solid #E2E8F0",padding:"14px 18px",marginBottom:16,display:"flex",alignItems:"center",gap:20,flexWrap:"wrap"}}>
+            <div><p style={{fontSize:11,color:"#64748B",fontWeight:700,margin:"0 0 4px",textTransform:"uppercase",letterSpacing:1}}>{result.data.metric.label}</p><p style={{fontSize:28,fontWeight:900,color:"#4F46E5",margin:0}}>{masked?"••••":result.data.metric.value}</p></div>
+            <div style={{fontSize:13,color:"#64748B"}}>Target: <b>{result.data.metric.target}</b></div>
+          </div>}
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:12,marginBottom:16}}>
+            <div style={{background:"#fff",borderRadius:14,border:"1px solid #E2E8F0",padding:"14px 16px"}}><p style={{fontWeight:700,color:"#1E293B",margin:"0 0 12px",fontSize:13}}>📊 Highlights</p>{result.data.highlights?.map((h,i)=><p key={i} style={{fontSize:13,color:"#374151",margin:"0 0 10px",lineHeight:1.5,paddingLeft:12,borderLeft:"3px solid #6366F1"}}>→ {h}</p>)}</div>
+            <div style={{background:"#fff",borderRadius:14,border:"1px solid #E2E8F0",padding:"14px 16px"}}><p style={{fontWeight:700,color:"#1E293B",margin:"0 0 12px",fontSize:13}}>⚡ This Week</p>{result.data.actions?.map((a,i)=><div key={i} style={{display:"flex",gap:8,marginBottom:10,alignItems:"flex-start"}}><span style={{display:"inline-block",padding:"2px 8px",borderRadius:20,fontSize:11,fontWeight:600,background:["#EEF2FF","#F0FDF4","#FFFBEB"][i%3],color:["#4F46E5","#059669","#B45309"][i%3],flexShrink:0}}>{i+1}</span><p style={{fontSize:13,color:"#374151",margin:0,lineHeight:1.5}}>{a}</p></div>)}</div>
+          </div>
+          <button onClick={()=>setResult(null)} style={{padding:"8px 18px",background:"#F1F5F9",border:"none",borderRadius:8,fontSize:13,cursor:"pointer",width:"100%"}}>↻ Regenerate</button>
+        </div>
+      )}
+
+      {result&&result.mode==="monthly"&&(
+        <div>
+          <div style={{background:"linear-gradient(135deg,#1e1b4b,#312e81)",borderRadius:16,padding:"24px 28px",marginBottom:20,display:"flex",alignItems:"center",gap:20,flexWrap:"wrap"}}>
+            <div style={{textAlign:"center"}}>
+              <svg width={100} height={100} viewBox="0 0 100 100">
+                <circle cx={50} cy={50} r={42} fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth={8}/>
+                <circle cx={50} cy={50} r={42} fill="none" stroke={result.data.score>=70?"#22C55E":result.data.score>=50?"#F59E0B":"#EF4444"} strokeWidth={8} strokeDasharray={`${(result.data.score/100)*264} 264`} strokeLinecap="round" transform="rotate(-90 50 50)"/>
+                <text x={50} y={46} textAnchor="middle" fill="#fff" fontSize={24} fontWeight={800}>{result.data.score}</text>
+                <text x={50} y={62} textAnchor="middle" fill="rgba(255,255,255,0.5)" fontSize={11}>/100</text>
+              </svg>
             </div>
-            {/* Regenerate */}
-            <button onClick={generate} disabled={loading} style={{ position:"absolute", top:16, right:16, background:"rgba(255,255,255,0.12)", border:"none", borderRadius:8, padding:"6px 12px", color:"#fff", fontSize:12, cursor:"pointer" }}>
-              {loading?"…":"↻ Refresh"}
-            </button>
+            <div style={{flex:1}}>
+              <p style={{color:"rgba(255,255,255,0.5)",fontSize:11,fontWeight:700,textTransform:"uppercase",letterSpacing:1,margin:"0 0 4px"}}>Financial Health</p>
+              <p style={{color:"#fff",fontSize:24,fontWeight:900,margin:"0 0 6px"}}>{result.data.grade}</p>
+              <p style={{color:"rgba(255,255,255,0.75)",fontSize:14,margin:0,lineHeight:1.5}}>{result.data.headline}</p>
+            </div>
+            <button onClick={()=>setResult(null)} disabled={loading} style={{background:"rgba(255,255,255,0.12)",border:"none",borderRadius:8,padding:"8px 14px",color:"#fff",fontSize:12,cursor:"pointer"}}>↻ Refresh</button>
           </div>
-
-          {/* Insights */}
-          <p style={{ ...styles.sectionTitle, marginBottom:12 }}>Key Insights</p>
-          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))", gap:12, marginBottom:20 }}>
-            {result.insights?.map((ins,i) => {
-              const colors = { warning:["#FFFBEB","#FDE68A","#92400E"], success:["#F0FDF4","#6EE7B7","#166534"], info:["#EFF6FF","#BFDBFE","#1e3a8a"] };
-              const [bg,bdr,txt] = colors[ins.type]||colors.info;
-              return (
-                <div key={i} style={{ background:bg, border:`1px solid ${bdr}`, borderRadius:12, padding:"14px 16px" }}>
-                  <p style={{ fontWeight:700, fontSize:14, color:txt, margin:"0 0 6px" }}>{ins.title}</p>
-                  <p style={{ fontSize:13, color:txt, margin:0, lineHeight:1.5, opacity:0.85 }}>{ins.body}</p>
-                </div>
-              );
-            })}
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:12,marginBottom:20}}>
+            {result.data.insights?.map((ins,i)=>{const [bg,bdr,txt]=iClr[ins.type]||iClr.info;return(<div key={i} style={{background:bg,border:`1px solid ${bdr}`,borderRadius:12,padding:"14px 16px"}}><p style={{fontWeight:700,fontSize:14,color:txt,margin:"0 0 6px"}}>{ins.title}</p><p style={{fontSize:13,color:txt,margin:0,lineHeight:1.5,opacity:0.85}}>{ins.body}</p></div>);})}
           </div>
-
-          {/* Recommendations */}
-          <p style={{ ...styles.sectionTitle, marginBottom:12 }}>Action Items</p>
-          <div style={{ ...styles.card, marginBottom:20, padding:0, overflow:"hidden" }}>
-            {result.recommendations?.map((rec,i) => {
-              const pClr = { high:"#EF4444", medium:"#F59E0B", low:"#10B981" };
-              return (
-                <div key={i} style={{ display:"flex", gap:12, padding:"14px 16px", borderBottom:i<result.recommendations.length-1?"1px solid #F3F4F6":"none", alignItems:"flex-start" }}>
-                  <div style={{ flexShrink:0, width:8, height:8, borderRadius:"50%", background:pClr[rec.priority]||"#6B7280", marginTop:6 }} />
-                  <div style={{ flex:1 }}>
-                    <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:4 }}>
-                      <span style={{ fontWeight:700, fontSize:14, color:"#111827" }}>{rec.title}</span>
-                      <span style={{ ...styles.badge, fontSize:11 }}>{rec.tag}</span>
-                    </div>
-                    <p style={{ fontSize:13, color:"#4B5563", margin:0, lineHeight:1.5 }}>{rec.action}</p>
-                  </div>
-                  <span style={{ flexShrink:0, fontSize:11, fontWeight:700, color:pClr[rec.priority]||"#6B7280", textTransform:"uppercase" }}>{rec.priority}</span>
-                </div>
-              );
-            })}
-          </div>
-
-          {/* 90-day plan */}
-          <p style={{ ...styles.sectionTitle, marginBottom:12 }}>90-Day Growth Plan</p>
-          <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill,minmax(220px,1fr))", gap:12 }}>
-            {result.plan?.map((step,i) => (
-              <div key={i} style={{ ...styles.card, borderLeft:`4px solid ${COLORS[i%COLORS.length]}`, paddingLeft:16 }}>
-                <p style={{ fontWeight:700, fontSize:13, color:COLORS[i%COLORS.length], margin:"0 0 6px" }}>{step.week}</p>
-                <p style={{ fontWeight:600, fontSize:14, color:"#111827", margin:"0 0 4px" }}>{step.action}</p>
-                <p style={{ fontSize:12, color:"#6B7280", margin:0, lineHeight:1.4 }}>🎯 {step.goal}</p>
+          <div style={{background:"#fff",borderRadius:14,border:"1px solid #E2E8F0",padding:0,overflow:"hidden",marginBottom:20}}>
+            <p style={{fontSize:15,fontWeight:700,color:"#0F172A",padding:"14px 16px 0",margin:0}}>Action Items</p>
+            {result.data.recommendations?.map((r,i)=>(
+              <div key={i} style={{display:"flex",gap:12,padding:"12px 16px",borderTop:"1px solid #F1F5F9",alignItems:"flex-start"}}>
+                <div style={{width:8,height:8,borderRadius:"50%",background:pClr[r.priority]||"#94A3B8",marginTop:5,flexShrink:0}}/>
+                <div style={{flex:1}}><p style={{fontWeight:700,fontSize:14,color:"#0F172A",margin:"0 0 3px"}}>{r.title}</p><p style={{fontSize:13,color:"#475569",margin:0,lineHeight:1.5}}>{r.action}</p></div>
+                <span style={{fontSize:11,fontWeight:700,color:pClr[r.priority]||"#94A3B8",textTransform:"uppercase",flexShrink:0}}>{r.priority}</span>
               </div>
             ))}
           </div>
+          {result.data.plan&&(
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:12}}>
+              {result.data.plan.map((step,i)=>(
+                <div key={i} style={{background:"#fff",borderRadius:12,border:"1px solid #E2E8F0",padding:"14px 16px",borderLeft:`4px solid ${COLORS[i%COLORS.length]}`}}>
+                  <p style={{fontWeight:700,fontSize:13,color:COLORS[i%COLORS.length],margin:"0 0 6px"}}>{step.week}</p>
+                  <p style={{fontWeight:600,fontSize:14,color:"#0F172A",margin:"0 0 4px"}}>{step.action}</p>
+                  <p style={{fontSize:12,color:"#64748B",margin:0,lineHeight:1.4}}>🎯 {step.goal}</p>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
-
-      {/* CSS for spinner */}
-
+      <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
     </div>
   );
 }
@@ -933,181 +890,209 @@ function ChannelModal({ ch, onSave, onClose }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  DASHBOARD TAB
+//  DECISION DASHBOARD — understand everything in 5 seconds
 // ═══════════════════════════════════════════════════════════════════════════════
 function DashboardTab({ entries, channels, fxRate }) {
-  const fe = useCallback(e=>fxAmt(e,fxRate),[fxRate]);
-  const inc   = useMemo(()=>entries.filter(e=>e.type==="Income").reduce((s,e)=>s+fe(e),0),[entries,fe]);
-  const exp   = useMemo(()=>entries.filter(e=>e.type==="Expense").reduce((s,e)=>s+fe(e),0),[entries,fe]);
-  const opRev = useMemo(()=>entries.filter(e=>e.type==="Income"&&OP_CATS.includes(e.category)).reduce((s,e)=>s+fe(e),0),[entries,fe]);
-  const loans = useMemo(()=>entries.filter(e=>["Business Loan Received","Investment / Loan Received"].includes(e.category)).reduce((s,e)=>s+fe(e),0),[entries,fe]);
-  const invest= useMemo(()=>entries.filter(e=>e.category==="Investment / Loan Received").reduce((s,e)=>s+fe(e),0),[entries,fe]);
-  const capital=useMemo(()=>entries.filter(e=>["Capital Injection"].includes(e.category)).reduce((s,e)=>s+fe(e),0),[entries,fe]);
+  const masked = useMask();
+  const fe = useCallback(e => fxAmt(e,fxRate), [fxRate]);
+  const inc    = useMemo(()=>entries.filter(e=>e.type==="Income").reduce((s,e)=>s+fe(e),0),[entries,fe]);
+  const exp    = useMemo(()=>entries.filter(e=>e.type==="Expense").reduce((s,e)=>s+fe(e),0),[entries,fe]);
+  const net    = inc - exp;
+  const opRev  = useMemo(()=>entries.filter(e=>e.type==="Income"&&OP_CATS.includes(e.category)).reduce((s,e)=>s+fe(e),0),[entries,fe]);
+  const loans  = useMemo(()=>entries.filter(e=>["Business Loan Received","Investment / Loan Received"].includes(e.category)).reduce((s,e)=>s+fe(e),0),[entries,fe]);
+
+  const monthly = useMemo(()=>MONTHS.map((m,i)=>({
+    month:m,
+    inc: entries.filter(e=>e.type==="Income"&&getMonth(e.date)===i).reduce((s,e)=>s+fe(e),0),
+    exp: entries.filter(e=>e.type==="Expense"&&getMonth(e.date)===i).reduce((s,e)=>s+fe(e),0),
+    opR: entries.filter(e=>e.type==="Income"&&OP_CATS.includes(e.category)&&getMonth(e.date)===i).reduce((s,e)=>s+fe(e),0),
+  })).filter(m=>m.inc>0||m.exp>0),[entries,fe]);
+
+  const bizBreak = useMemo(()=>BUSINESSES.map(b=>({
+    name:b,
+    inc:entries.filter(e=>e.business===b&&e.type==="Income").reduce((s,e)=>s+fe(e),0),
+    exp:entries.filter(e=>e.business===b&&e.type==="Expense").reduce((s,e)=>s+fe(e),0),
+  })),[entries,fe]);
 
   const expCats = useMemo(()=>{
-    const m={};
-    entries.filter(e=>e.type==="Expense").forEach(e=>{m[e.category]=(m[e.category]||0)+fe(e);});
-    return Object.entries(m).map(([n,v])=>({name:n,value:v})).sort((a,b)=>b.value-a.value);
+    const m={};entries.filter(e=>e.type==="Expense").forEach(e=>{m[e.category]=(m[e.category]||0)+fe(e);});
+    return Object.entries(m).map(([name,value])=>({name,value})).sort((a,b)=>b.value-a.value).slice(0,6);
   },[entries,fe]);
 
-  const monthly = useMemo(()=>
-    MONTHS.map((m,i)=>({
-      month:m,
-      inc:  entries.filter(e=>e.type==="Income"&&getMonth(e.date)===i).reduce((s,e)=>s+fe(e),0),
-      exp:  entries.filter(e=>e.type==="Expense"&&getMonth(e.date)===i).reduce((s,e)=>s+fe(e),0),
-      opR:  entries.filter(e=>e.type==="Income"&&OP_CATS.includes(e.category)&&getMonth(e.date)===i).reduce((s,e)=>s+fe(e),0),
-    })).filter(m=>m.inc>0||m.exp>0)
-  ,[entries,fe]);
+  const flags = useMemo(()=>{
+    const green=[],red=[];
+    if (monthly.length>=2){
+      const last=monthly[monthly.length-1],prev=monthly[monthly.length-2];
+      if(last.inc>prev.inc)    green.push(`Revenue up ${Math.round((last.inc-prev.inc)/prev.inc*100)}% vs previous month`);
+      if(last.exp<prev.exp)    green.push(`Expenses down ${Math.round((prev.exp-last.exp)/prev.exp*100)}% vs previous month`);
+      if(last.inc<prev.inc*0.8) red.push(`Revenue dropped ${Math.round((prev.inc-last.inc)/prev.inc*100)}% vs previous month`);
+      if(last.exp>prev.exp*1.3) red.push(`Expenses spiked ${Math.round((last.exp-prev.exp)/prev.exp*100)}% vs previous month`);
+    }
+    if(loans>0){const dr=loans/inc;if(dr>0.35)red.push(`Debt is ${Math.round(dr*100)}% of inflow — high repayment pressure`);else green.push("Debt-to-income ratio is manageable");}
+    if(opRev>0&&opRev/inc>0.22)green.push(`Operating revenue is ${Math.round(opRev/inc*100)}% of inflow — solid`);
+    else if(opRev>0&&opRev/inc<0.12)red.push(`Only ${Math.round(opRev/inc*100)}% op. revenue — heavy reliance on capital`);
+    const avgBurn=exp/(monthly.length||1);const runway=net/avgBurn;
+    if(runway>6)green.push(`~${Math.round(runway)} months runway at current burn rate`);
+    else if(runway<3&&runway>0)red.push(`Only ~${Math.round(runway)} months runway — review burn now`);
+    const feb=monthly.find(m=>m.month==="Feb");if(feb&&feb.inc<feb.exp)red.push("February cashflow was negative — watch seasonal dip");
+    const miz=bizBreak.find(b=>b.name==="Migrizo");if(miz&&opRev>0&&miz.inc/opRev>0.45)green.push(`Migrizo driving ${Math.round(miz.inc/opRev*100)}% of operating revenue`);
+    return{green:green.slice(0,4),red:red.slice(0,4)};
+  },[monthly,opRev,inc,exp,net,loans,bizBreak]);
 
-  const acctData = useMemo(()=>ACCOUNTS.map(a=>({
-    ...a,
-    inc: entries.filter(e=>e.type==="Income"&&e.account===a.id).reduce((s,e)=>s+e.amount,0),
-    exp: entries.filter(e=>e.type==="Expense"&&e.account===a.id).reduce((s,e)=>s+e.amount,0),
-    cnt: entries.filter(e=>e.account===a.id).length,
-  })),[entries]);
+  const runway = Math.max(0, Math.round(net/(exp/(monthly.length||1))));
 
   return (
     <div>
-      {/* KPI Cards */}
-      <div className="ffd-grid-4" style={{ marginBottom:20 }}>
-        <StatCard label="Total Cash In"     val={fmt(inc)}   sub={`${entries.filter(e=>e.type==="Income").length} credits · all accounts`}    color="#059669" bg="#F0FDF4" bdr="#6EE7B7" />
-        <StatCard label="Total Cash Out"    val={fmt(exp)}   sub={`${entries.filter(e=>e.type==="Expense").length} debits · all accounts`}     color="#DC2626" bg="#FEF2F2" bdr="#FCA5A5" />
-        <StatCard label="Net Cash Flow"     val={fmt(inc-exp)}sub="All accounts combined (INR)"                                               color="#4338CA" bg="#EEF2FF" bdr="#A5B4FC" />
-        <StatCard label="Operating Revenue" val={fmt(opRev)} sub="Marketplace + Consulting + Assignment"                                      color="#B45309" bg="#FFFBEB" bdr="#FDE68A" />
-      </div>
-
-      {/* Account cards */}
-      <div className="ffd-grid-3" style={{ marginBottom:20 }}>
-        {acctData.map(a=>(
-          <div key={a.id} style={{ ...styles.card, border:`2px solid ${a.clr}30` }}>
-            <div style={{ display:"flex", justifyContent:"space-between", marginBottom:10 }}>
-              <span style={{ fontSize:14, fontWeight:700, color:a.clr }}>{a.label}</span>
-              <span style={{ ...styles.badge, background:a.cur==="GBP"?"#DBEAFE":"#DCFCE7", color:a.cur==="GBP"?"#1e3a8a":"#166534" }}>{a.cur}</span>
-            </div>
-            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:6 }}>
-              {[["In",fmtCur(a.inc,a.cur),"#059669"],["Out",fmtCur(a.exp,a.cur),"#DC2626"],["Net",fmtCur(a.inc-a.exp,a.cur),a.clr]].map(([l,v,c])=>(
-                <div key={l}><p style={{ fontSize:11,color:"#6B7280",margin:"0 0 2px",fontWeight:600 }}>{l}</p><p style={{ fontSize:13,fontWeight:700,color:c,margin:0 }}>{v}</p></div>
-              ))}
-            </div>
-            <p style={{ fontSize:12,color:"#9CA3AF",margin:"8px 0 0" }}>{a.cnt} entries</p>
-          </div>
-        ))}
-      </div>
-
-      {/* Funding breakdown */}
-      <div style={{ ...styles.card, marginBottom:20, background:"#FAFAFA", border:"1px dashed #D1D5DB" }}>
-        <p style={{ fontSize:13,fontWeight:700,color:"#4B5563",margin:"0 0 12px" }}>FUNDING BREAKDOWN — Q1 2026</p>
-        <div className="ffd-grid-4">
-          {[["Business Loan (Hemlata)",fmt(loans),"#7C3AED","#F5F3FF","DEBT to repay"],["External Investment",fmt(invest),"#0891B2","#ECFEFF","Anurag+Mansi"],["Owner Capital (Shailen)",fmt(capital),"#059669","#F0FDF4","IFTs + Cash"],["Operating Revenue",fmt(opRev),"#B45309","#FFFBEB","All 3 businesses"]].map(([l,v,c,bg,s])=>(
-            <div key={l} style={{ background:bg, borderRadius:10, padding:"12px 14px" }}>
-              <p style={{ fontSize:11,fontWeight:700,color:"#6B7280",textTransform:"uppercase",letterSpacing:"0.5px",margin:"0 0 4px" }}>{l}</p>
-              <p style={{ fontSize:20,fontWeight:800,color:c,margin:"0 0 2px" }}>{v}</p>
-              <p style={{ fontSize:12,color:"#6B7280",margin:0 }}>{s}</p>
+      {/* ── Hero ── */}
+      <div style={{background:"linear-gradient(135deg,#1e1b4b 0%,#312e81 60%,#4338ca 100%)",borderRadius:20,padding:28,marginBottom:20,color:"#fff"}}>
+        <p style={{fontSize:11,fontWeight:700,letterSpacing:2,textTransform:"uppercase",color:"rgba(255,255,255,0.5)",margin:"0 0 8px"}}>NET POSITION · {new Date().getFullYear()}</p>
+        <p style={{fontSize:52,fontWeight:900,margin:"0 0 4px",letterSpacing:-2,lineHeight:1}}>{masked?"₹ ••••••":fmt(net)}</p>
+        <p style={{fontSize:14,color:net>=0?"#86EFAC":"#FCA5A5",margin:"0 0 24px",fontWeight:500}}>{net>=0?"↑ Positive":"↓ Negative"} · {entries.length} entries</p>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12}}>
+          {[["💰 Total In",inc,"#86EFAC"],["💸 Total Out",exp,"#FCA5A5"],["🏪 Op. Revenue",opRev,"#FDE68A"]].map(([lbl,val,clr])=>(
+            <div key={lbl} style={{background:"rgba(255,255,255,0.08)",borderRadius:12,padding:"12px 14px"}}>
+              <p style={{fontSize:11,color:"rgba(255,255,255,0.5)",margin:"0 0 4px",fontWeight:600}}>{lbl}</p>
+              <p style={{fontSize:18,fontWeight:800,color:clr,margin:0}}>{masked?"₹ ••••":fmt(val)}</p>
             </div>
           ))}
         </div>
       </div>
 
-      {/* Charts */}
-      <div className="ffd-grid-2" style={{ marginBottom:20 }}>
-        <div style={styles.card}>
-          <p style={styles.sectionTitle}>Monthly Cash Flow</p>
-          <ResponsiveContainer width="100%" height={200}>
-            <BarChart data={monthly} margin={{ top:5,right:5,left:-15,bottom:0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#F3F4F6" vertical={false} />
-              <XAxis dataKey="month" tick={{ fontSize:11, fill:"#6B7280" }} axisLine={false} tickLine={false} />
-              <YAxis tick={{ fontSize:10, fill:"#9CA3AF" }} tickFormatter={v=>fmtK(v)} axisLine={false} tickLine={false} />
-              <Tooltip formatter={v=>[fmt(v)]} contentStyle={{ fontSize:13,borderRadius:10,border:"1px solid #E5E7EB" }} />
-              <Legend wrapperStyle={{ fontSize:12 }} />
-              <Bar dataKey="inc" fill="#6EE7B7" radius={[4,4,0,0]} name="Income" />
-              <Bar dataKey="exp" fill="#FCA5A5" radius={[4,4,0,0]} name="Expense" />
-              <Bar dataKey="opR" fill="#FDE68A" radius={[4,4,0,0]} name="Op.Rev" />
-            </BarChart>
-          </ResponsiveContainer>
-        </div>
-        <div style={styles.card}>
-          <p style={styles.sectionTitle}>Expense Categories</p>
-          <ResponsiveContainer width="100%" height={180}>
-            <PieChart>
-              <Pie data={expCats.slice(0,8)} cx="50%" cy="50%" outerRadius={82} innerRadius={36} dataKey="value" stroke="none">
-                {expCats.slice(0,8).map((_,i)=><Cell key={i} fill={COLORS[i%COLORS.length]} />)}
-              </Pie>
-              <Tooltip formatter={v=>[fmt(v)]} contentStyle={{ fontSize:12,borderRadius:10,border:"1px solid #E5E7EB" }} />
-            </PieChart>
-          </ResponsiveContainer>
-          <div style={{ display:"flex", flexWrap:"wrap", gap:"4px 10px" }}>
-            {expCats.slice(0,8).map((e,i)=>(
-              <span key={e.name} style={{ fontSize:11,color:"#374151",display:"flex",alignItems:"center",gap:4 }}>
-                <span style={{ width:8,height:8,borderRadius:2,background:COLORS[i%COLORS.length],display:"inline-block" }} />{e.name}
-              </span>
-            ))}
+      {/* ── Quick stats ── */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(180px,1fr))",gap:12,marginBottom:20}}>
+        {[
+          ["⏱ Runway",`~${runway} months`,"at current burn","#0EA5E9","#F0F9FF"],
+          ["🔥 Burn/mo",fmt(exp/(monthly.length||1),masked),"avg","#EF4444","#FFF1F2"],
+          ["🏦 Debt",fmt(loans,masked),"to repay","#8B5CF6","#F5F3FF"],
+          ["📈 Best Month",monthly.length?monthly.reduce((a,b)=>b.inc>a.inc?b:a,{inc:0,month:"—"}).month:"—","by inflow","#059669","#F0FDF4"],
+        ].map(([lbl,val,sub,clr,bg])=>(
+          <div key={lbl} style={{background:bg,borderRadius:14,border:`1px solid ${clr}22`,padding:"14px 16px"}}>
+            <p style={{fontSize:11,color:"#64748B",fontWeight:700,margin:"0 0 4px",textTransform:"uppercase",letterSpacing:"0.5px"}}>{lbl}</p>
+            <p style={{fontSize:20,fontWeight:800,color:clr,margin:"0 0 2px"}}>{val}</p>
+            <p style={{fontSize:11,color:"#94A3B8",margin:0}}>{sub}</p>
           </div>
+        ))}
+      </div>
+
+      {/* ── Flags ── */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(300px,1fr))",gap:12,marginBottom:20}}>
+        <div style={{background:"#fff",borderRadius:14,border:"1px solid #BBF7D0",padding:"16px 18px"}}>
+          <p style={{fontWeight:700,fontSize:14,color:"#166534",margin:"0 0 12px"}}>🟢 Green Flags</p>
+          {flags.green.length===0?<p style={{fontSize:13,color:"#94A3B8"}}>Add more data to see flags</p>:flags.green.map((f,i)=>(
+            <div key={i} style={{display:"flex",gap:8,marginBottom:8,alignItems:"flex-start"}}>
+              <span style={{color:"#22C55E",flexShrink:0}}>✓</span>
+              <p style={{fontSize:13,color:"#166534",margin:0,lineHeight:1.5}}>{f}</p>
+            </div>
+          ))}
+        </div>
+        <div style={{background:"#fff",borderRadius:14,border:"1px solid #FECACA",padding:"16px 18px"}}>
+          <p style={{fontWeight:700,fontSize:14,color:"#7F1D1D",margin:"0 0 12px"}}>🔴 Risk Signals</p>
+          {flags.red.length===0?<p style={{fontSize:13,color:"#94A3B8"}}>No risk signals — looking good!</p>:flags.red.map((f,i)=>(
+            <div key={i} style={{display:"flex",gap:8,marginBottom:8,alignItems:"flex-start"}}>
+              <span style={{color:"#EF4444",flexShrink:0}}>⚠</span>
+              <p style={{fontSize:13,color:"#7F1D1D",margin:0,lineHeight:1.5}}>{f}</p>
+            </div>
+          ))}
         </div>
       </div>
 
-      {/* Trend line */}
-      <div style={{ ...styles.card, marginBottom:20 }}>
-        <p style={styles.sectionTitle}>Monthly Trend — Income vs Expense vs Operating Revenue</p>
+      {/* ── Chart ── */}
+      <div style={{background:"#fff",borderRadius:14,border:"1px solid #E2E8F0",padding:"16px 18px",marginBottom:20}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16,flexWrap:"wrap",gap:8}}>
+          <p style={{fontSize:15,fontWeight:700,color:"#0F172A",margin:0}}>Cash Flow Trend</p>
+          <div style={{display:"flex",gap:8}}>
+            <button onClick={()=>exportCSV(entries,"cashflow.csv")} style={{padding:"6px 12px",background:"#F1F5F9",border:"none",borderRadius:8,fontSize:12,cursor:"pointer",fontWeight:500}}>↓ CSV</button>
+            <button onClick={()=>exportXLSX(entries,"founder-finance.xlsx")} style={{padding:"6px 14px",background:"#4F46E5",color:"#fff",border:"none",borderRadius:8,fontSize:12,cursor:"pointer",fontWeight:600}}>↓ Excel</button>
+          </div>
+        </div>
         <ResponsiveContainer width="100%" height={220}>
-          <LineChart data={monthly} margin={{ top:5,right:10,left:-10,bottom:0 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#F3F4F6" vertical={false} />
-            <XAxis dataKey="month" tick={{ fontSize:12,fill:"#6B7280" }} axisLine={false} tickLine={false} />
-            <YAxis tick={{ fontSize:11,fill:"#9CA3AF" }} tickFormatter={v=>fmtK(v)} axisLine={false} tickLine={false} />
-            <Tooltip formatter={v=>[fmt(v)]} contentStyle={{ fontSize:13,borderRadius:10,border:"1px solid #E5E7EB" }} />
-            <Legend wrapperStyle={{ fontSize:12 }} />
-            <Line type="monotone" dataKey="inc" stroke="#10B981" strokeWidth={2.5} dot={{ r:4,fill:"#10B981",stroke:"#fff",strokeWidth:2 }} name="Cash In" />
-            <Line type="monotone" dataKey="exp" stroke="#EF4444" strokeWidth={2.5} dot={{ r:4,fill:"#EF4444",stroke:"#fff",strokeWidth:2 }} name="Expense" />
-            <Line type="monotone" dataKey="opR" stroke="#F59E0B" strokeWidth={2} strokeDasharray="6 3" dot={{ r:3,fill:"#F59E0B",stroke:"#fff",strokeWidth:2 }} name="Op.Rev" />
-          </LineChart>
+          <BarChart data={monthly} margin={{top:5,right:5,left:-15,bottom:0}}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#F3F4F6" vertical={false}/>
+            <XAxis dataKey="month" tick={{fontSize:11,fill:"#94A3B8"}} axisLine={false} tickLine={false}/>
+            <YAxis tick={{fontSize:10,fill:"#94A3B8"}} tickFormatter={v=>masked?"":fmtK(v)} axisLine={false} tickLine={false}/>
+            <Tooltip formatter={v=>[masked?"₹ ••••":fmt(v)]} contentStyle={{fontSize:13,borderRadius:10,border:"1px solid #E2E8F0"}}/>
+            <Legend wrapperStyle={{fontSize:12}}/>
+            <Bar dataKey="inc" fill="#6EE7B7" radius={[4,4,0,0]} name="Income"/>
+            <Bar dataKey="exp" fill="#FCA5A5" radius={[4,4,0,0]} name="Expense"/>
+            <Bar dataKey="opR" fill="#FDE68A" radius={[4,4,0,0]} name="Op.Rev"/>
+          </BarChart>
         </ResponsiveContainer>
       </div>
 
-      {/* Tables */}
-      <div className="ffd-grid-2">
-        <div style={styles.card}>
-          <p style={styles.sectionTitle}>Expense Breakdown</p>
-          <div style={{ overflowX:"auto" }}>
-            <table style={{ width:"100%", borderCollapse:"collapse", minWidth:320 }}>
-              <thead><tr><th style={styles.th}>Category</th><th style={{ ...styles.th, textAlign:"right" }}>Amount</th><th style={{ ...styles.th, textAlign:"right" }}>Share</th></tr></thead>
-              <tbody>
-                {expCats.map((e,i)=>(
-                  <tr key={e.name} style={{ background:i%2===0?"#fff":"#FAFAFA" }}>
-                    <td style={{ ...styles.td, display:"flex", alignItems:"center", gap:8 }}>
-                      <span style={{ width:8,height:8,borderRadius:2,background:COLORS[i%COLORS.length],flexShrink:0,display:"inline-block" }} />{e.name}
-                    </td>
-                    <td style={{ ...styles.td, textAlign:"right", color:"#DC2626", fontWeight:700 }}>{fmt(e.value)}</td>
-                    <td style={{ ...styles.td, textAlign:"right" }}>
-                      <div style={{ display:"flex", alignItems:"center", gap:6, justifyContent:"flex-end" }}>
-                        <div style={{ width:40,height:5,borderRadius:4,background:"#F3F4F6",overflow:"hidden" }}><div style={{ width:pct(e.value,exp),height:"100%",background:COLORS[i%COLORS.length] }} /></div>
-                        <span style={{ fontSize:12,color:"#6B7280",minWidth:34 }}>{pct(e.value,exp)}</span>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+      {/* ── Business + Expenses ── */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(320px,1fr))",gap:16,marginBottom:20}}>
+        <div style={{background:"#fff",borderRadius:14,border:"1px solid #E2E8F0",padding:"16px 18px"}}>
+          <p style={{fontSize:15,fontWeight:700,color:"#0F172A",margin:"0 0 14px"}}>Business Performance</p>
+          {bizBreak.map((b,i)=>{
+            const bNet=b.inc-b.exp;
+            return(
+              <div key={b.name} style={{marginBottom:12,paddingBottom:12,borderBottom:i<bizBreak.length-1?"1px solid #F1F5F9":"none"}}>
+                <div style={{display:"flex",justifyContent:"space-between",marginBottom:5}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8}}>
+                    <span style={{width:10,height:10,borderRadius:3,background:BIZ_CLR[b.name]||"#94A3B8",display:"inline-block"}}/>
+                    <span style={{fontWeight:700,fontSize:14,color:"#1E293B"}}>{b.name}</span>
+                  </div>
+                  <span style={{fontWeight:700,fontSize:14,color:bNet>=0?"#059669":"#DC2626"}}>{bNet>=0?"+":""}{masked?"••••":fmt(bNet)}</span>
+                </div>
+                <div style={{height:6,background:"#F1F5F9",borderRadius:4,overflow:"hidden",marginBottom:4}}>
+                  <div style={{height:"100%",width:inc>0?pct(b.inc,inc):"0%",background:BIZ_CLR[b.name]||"#94A3B8",borderRadius:4}}/>
+                </div>
+                <div style={{display:"flex",justifyContent:"space-between",fontSize:12,color:"#64748B"}}>
+                  <span>In: {masked?"••••":fmt(b.inc)}</span><span>Out: {masked?"••••":fmt(b.exp)}</span>
+                </div>
+              </div>
+            );
+          })}
         </div>
-        <div style={styles.card}>
-          <p style={styles.sectionTitle}>Monthly Summary</p>
-          <table style={{ width:"100%", borderCollapse:"collapse" }}>
-            <thead><tr><th style={styles.th}>Month</th><th style={{ ...styles.th, textAlign:"right" }}>In</th><th style={{ ...styles.th, textAlign:"right" }}>Out</th><th style={{ ...styles.th, textAlign:"right" }}>Net</th></tr></thead>
+        <div style={{background:"#fff",borderRadius:14,border:"1px solid #E2E8F0",padding:"16px 18px"}}>
+          <p style={{fontSize:15,fontWeight:700,color:"#0F172A",margin:"0 0 14px"}}>Top Expenses</p>
+          {expCats.map((e,i)=>(
+            <div key={e.name} style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
+              <span style={{width:8,height:8,borderRadius:2,background:COLORS[i%COLORS.length],flexShrink:0}}/>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
+                  <span style={{fontSize:13,color:"#374151",fontWeight:500,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{e.name}</span>
+                  <span style={{fontSize:13,fontWeight:700,color:"#DC2626",flexShrink:0,marginLeft:8}}>{masked?"••••":fmt(e.value)}</span>
+                </div>
+                <div style={{height:4,background:"#F1F5F9",borderRadius:2,overflow:"hidden"}}>
+                  <div style={{height:"100%",width:pct(e.value,exp),background:COLORS[i%COLORS.length],borderRadius:2}}/>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* ── Monthly table ── */}
+      <div style={{background:"#fff",borderRadius:14,border:"1px solid #E2E8F0",padding:"16px 18px"}}>
+        <p style={{fontSize:15,fontWeight:700,color:"#0F172A",margin:"0 0 14px"}}>Monthly Summary</p>
+        <div style={{overflowX:"auto"}}>
+          <table style={{width:"100%",borderCollapse:"collapse",minWidth:400}}>
+            <thead><tr><th style={styles.th}>Month</th><th style={{...styles.th,textAlign:"right"}}>In</th><th style={{...styles.th,textAlign:"right"}}>Out</th><th style={{...styles.th,textAlign:"right"}}>Net</th></tr></thead>
             <tbody>
-              {monthly.map((m,i)=>{
-                const net=m.inc-m.exp;
-                return (
-                  <tr key={m.month} style={{ background:i%2===0?"#fff":"#FAFAFA" }}>
-                    <td style={{ ...styles.td, fontWeight:600 }}>{m.month}</td>
-                    <td style={{ ...styles.td, textAlign:"right", color:"#059669", fontWeight:700 }}>{fmt(m.inc)}</td>
-                    <td style={{ ...styles.td, textAlign:"right", color:"#DC2626", fontWeight:700 }}>{fmt(m.exp)}</td>
-                    <td style={{ ...styles.td, textAlign:"right" }}><span style={{ ...styles.badge, background:net>=0?"#DCFCE7":"#FEE2E2", color:net>=0?"#166534":"#7F1D1D" }}>{net>=0?"+":""}{fmt(net)}</span></td>
-                  </tr>
-                );
-              })}
+              {monthly.map((m,i)=>{const n=m.inc-m.exp;return(
+                <tr key={m.month} style={{background:i%2===0?"#fff":"#FAFAFA"}}>
+                  <td style={{...styles.td,fontWeight:600}}>{m.month}</td>
+                  <td style={{...styles.td,textAlign:"right",color:"#059669",fontWeight:600}}>{masked?"••••":fmt(m.inc)}</td>
+                  <td style={{...styles.td,textAlign:"right",color:"#DC2626",fontWeight:600}}>{masked?"••••":fmt(m.exp)}</td>
+                  <td style={{...styles.td,textAlign:"right"}}><span style={{...styles.badge,background:n>=0?"#DCFCE7":"#FEE2E2",color:n>=0?"#166534":"#7F1D1D"}}>{n>=0?"+":""}{masked?"••••":fmt(n)}</span></td>
+                </tr>
+              );})}
             </tbody>
           </table>
         </div>
       </div>
+      {pageCount>1&&(
+        <div style={{display:"flex",justifyContent:"center",gap:6,marginTop:14,alignItems:"center",flexWrap:"wrap"}}>
+          <button onClick={()=>setPage(p=>Math.max(1,p-1))} disabled={page===1} style={{padding:"6px 12px",background:"#F1F5F9",border:"none",borderRadius:6,cursor:"pointer",fontSize:13,color:page===1?"#CBD5E1":"#4F46E5"}}>←</button>
+          {Array.from({length:Math.min(pageCount,7)},(_,i)=>{
+            const p=pageCount<=7?i+1:page<=4?i+1:page>=pageCount-3?pageCount-6+i:page-3+i;
+            return <button key={p} onClick={()=>setPage(p)} style={{padding:"6px 12px",background:page===p?"#4F46E5":"#F1F5F9",color:page===p?"#fff":"#374151",border:"none",borderRadius:6,cursor:"pointer",fontSize:13,fontWeight:page===p?700:400}}>{p}</button>;
+          })}
+          <button onClick={()=>setPage(p=>Math.min(pageCount,p+1))} disabled={page===pageCount} style={{padding:"6px 12px",background:"#F1F5F9",border:"none",borderRadius:6,cursor:"pointer",fontSize:13,color:page===pageCount?"#CBD5E1":"#4F46E5"}}>→</button>
+          <span style={{fontSize:12,color:"#94A3B8",marginLeft:6}}>Page {page} of {pageCount} · {rows.length} total</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -1244,11 +1229,17 @@ function ChannelsTab({ entries, channels, fxRate, onEditCh, onDelCh, onAddCh }) 
 //  ENTRIES TAB
 // ═══════════════════════════════════════════════════════════════════════════════
 function EntriesTab({ entries, fxRate, onEdit, onDelete }) {
+  const masked = useMask();
   const [bizF,  setBizF]  = useState("All");
   const [typF,  setTypF]  = useState("All");
   const [accF,  setAccF]  = useState("All");
   const [yearF, setYearF] = useState("All");
   const [monF,  setMonF]  = useState("All");
+  const [search,setSearch]= useState("");
+  const [dateFrom,setDateFrom]=useState("");
+  const [dateTo,  setDateTo  ]=useState("");
+  const [page,    setPage    ]=useState(1);
+  const PER_PAGE = 25;
   const fe = useCallback(e=>fxAmt(e,fxRate),[fxRate]);
   const years = useMemo(()=>[...new Set(entries.map(e=>getYear(e.date)))].sort().reverse(),[entries]);
   const rows  = useMemo(()=>entries.filter(e=>
@@ -1256,12 +1247,24 @@ function EntriesTab({ entries, fxRate, onEdit, onDelete }) {
     (typF==="All"||e.type===typF)&&
     (accF==="All"||e.account===accF)&&
     (yearF==="All"||getYear(e.date)===yearF)&&
-    (monF==="All"||MONTHS[getMonth(e.date)]===monF)
-  ).sort((a,b)=>b.date.localeCompare(a.date)),[entries,bizF,typF,accF,yearF,monF]);
+    (monF==="All"||MONTHS[getMonth(e.date)]===monF)&&
+    (!search||e.description?.toLowerCase().includes(search.toLowerCase())||e.category?.toLowerCase().includes(search.toLowerCase()))&&
+    (!dateFrom||e.date>=dateFrom)&&
+    (!dateTo||e.date<=dateTo)
+  ).sort((a,b)=>b.date.localeCompare(a.date)),[entries,bizF,typF,accF,yearF,monF,search,dateFrom,dateTo]);
   const totIn  = rows.filter(r=>r.type==="Income").reduce((s,e)=>s+fe(e),0);
   const totOut = rows.filter(r=>r.type==="Expense").reduce((s,e)=>s+fe(e),0);
+  const pageCount = Math.ceil(rows.length / PER_PAGE);
+  const pageRows  = rows.slice((page-1)*PER_PAGE, page*PER_PAGE);
   return (
     <div>
+      {/* Search + Date Range */}
+      <div style={{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap",alignItems:"center"}}>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍 Search description or category…" style={{flex:1,minWidth:180,padding:"8px 12px",border:"1px solid #CBD5E1",borderRadius:8,fontSize:13,outline:"none",background:"#F8FAFC"}}/>
+        <input type="date" value={dateFrom} onChange={e=>{setDateFrom(e.target.value);setPage(1);}} style={{padding:"8px 10px",border:"1px solid #CBD5E1",borderRadius:8,fontSize:13,outline:"none",background:"#F8FAFC"}} title="From"/>
+        <input type="date" value={dateTo}   onChange={e=>{setDateTo(e.target.value);setPage(1);}}   style={{padding:"8px 10px",border:"1px solid #CBD5E1",borderRadius:8,fontSize:13,outline:"none",background:"#F8FAFC"}} title="To"/>
+        {(search||dateFrom||dateTo)&&<button onClick={()=>{setSearch("");setDateFrom("");setDateTo("");}} style={{padding:"8px 12px",background:"#FEE2E2",border:"none",borderRadius:8,fontSize:12,color:"#DC2626",cursor:"pointer",fontWeight:600}}>✕ Clear</button>}
+      </div>
       {/* Filters */}
       <div style={{ display:"flex", gap:7, marginBottom:10, alignItems:"center", flexWrap:"wrap" }}>
         <span style={{ fontSize:13, fontWeight:600, color:"#374151" }}>Business:</span>
@@ -1284,8 +1287,10 @@ function EntriesTab({ entries, fxRate, onEdit, onDelete }) {
           {MONTHS.map(m=><option key={m}>{m}</option>)}
         </select>
         <span style={{ marginLeft:"auto", fontSize:13, color:"#4B5563", fontWeight:600, whiteSpace:"nowrap" }}>
-          {rows.length} entries · In: {fmt(totIn)} · Out: {fmt(totOut)}
+          {rows.length} entries · In: {masked?"••••":fmt(totIn)} · Out: {masked?"••••":fmt(totOut)}
         </span>
+        <button onClick={()=>exportCSV(rows,"entries.csv")} style={{padding:"6px 12px",background:"#F1F5F9",border:"none",borderRadius:8,fontSize:12,cursor:"pointer",fontWeight:500,marginLeft:8}}>↓ CSV</button>
+        <button onClick={()=>exportXLSX(rows,"entries.xlsx")} style={{padding:"6px 12px",background:"#4F46E5",color:"#fff",border:"none",borderRadius:8,fontSize:12,cursor:"pointer",fontWeight:600}}>↓ Excel</button>
       </div>
       <div style={{ ...styles.card, overflowX:"auto" }}>
         <table style={{ width:"100%", borderCollapse:"collapse", minWidth:700 }}>
@@ -1293,7 +1298,7 @@ function EntriesTab({ entries, fxRate, onEdit, onDelete }) {
             <tr><th style={styles.th}>#</th><th style={styles.th}>Date</th><th style={styles.th}>Business</th><th style={styles.th}>Account</th><th style={styles.th}>Type</th><th style={styles.th}>Category</th><th style={styles.th}>Description</th><th style={{ ...styles.th, textAlign:"right" }}>Amount</th><th style={styles.th}/></tr>
           </thead>
           <tbody>
-            {rows.map((e,i)=>{
+            {pageRows.map((e,i)=>{
               const a = acct(e.account);
               return (
                 <tr key={e.id} style={{ background:i%2===0?"#fff":"#FAFAFA" }}>
@@ -1314,7 +1319,7 @@ function EntriesTab({ entries, fxRate, onEdit, onDelete }) {
                 </tr>
               );
             })}
-            {rows.length===0 && <tr><td colSpan={9} style={{ ...styles.td, textAlign:"center", padding:48, color:"#6B7280", fontSize:14 }}>No entries match the current filters.</td></tr>}
+            {pageRows.length===0 && <tr><td colSpan={9} style={{ ...styles.td, textAlign:"center", padding:48, color:"#6B7280", fontSize:14 }}>No entries match the filters.</td></tr>}
           </tbody>
         </table>
       </div>
@@ -1359,6 +1364,7 @@ export default function App() {
   const [pwdErr,   setPwdErr]   = useState(false);
   const [loading,  setLoading]  = useState(false);
   const [dbReady,  setDbReady]  = useState(false);
+  const [masked,   setMasked]   = useState(false);
   const [entries,  setEntries]  = useState([]);
   const [channels, setChannels] = useState([]);
   const [fxRate,   setFxRate]   = useState(107);
@@ -1403,8 +1409,12 @@ export default function App() {
         if (settings) {
           const fx  = settings.find(s=>s.key==="fx");
           const ck  = settings.find(s=>s.key==="claude_key");
-          if (fx?.value)  { setFxRate(fx.value); setFxInput(String(fx.value)); }
+          const tr  = settings.find(s=>s.key==="tag_rules");
+          const mk  = settings.find(s=>s.key==="masked");
+          if (fx?.value)  { setFxRate(parseFloat(fx.value)); setFxInput(String(parseFloat(fx.value))); }
           if (ck?.value)  setApiKey(ck.value);
+          if (tr?.value)  try{LEARNED_RULES=JSON.parse(JSON.stringify(tr.value));}catch(e){}
+          if (mk?.value)  setMasked(!!mk.value);
         }
       } catch(e) { console.error(e); }
       setLoading(false);
@@ -1422,6 +1432,8 @@ export default function App() {
   const onImported = (rows) => { setEntries(p=>[...rows.map(r=>({id:r.id||Date.now(),date:r.date,business:r.business,account:r.account,type:r.type,category:r.category,description:r.description,amount:r.amount})),...p]); setImportAcct(null); };
   const onFxBlur = async() => { const v=parseFloat(fxInput); if(v>0){setFxRate(v);await dbSetting("fx",v);}else setFxInput(String(fxRate)); };
   const onSetApiKey = async(k) => { setApiKey(k); await dbSetting("claude_key",k); };
+  const toggleMask  = async()  => { const nm=!masked; setMasked(nm); await dbSetting("masked",nm); };
+  const onLearn     = async(rules) => { await dbSetting("tag_rules", rules); };
 
   // ── Login ──
   if (!authed) return (
@@ -1469,7 +1481,8 @@ CREATE POLICY "public_access" ON ffd_settings FOR ALL TO anon USING (true) WITH 
   const TABS = [["dashboard","📊 Dashboard"],["accounts","🏦 Accounts"],["channels","📈 Channels"],["entries",`📋 Entries (${entries.length})`],["ai","✦ AI Insights"]];
 
   return (
-    <div style={{ minHeight:"100vh", background:"#F5F7FF", fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif", color:"#111827" }}>
+    <MaskCtx.Provider value={masked}>
+    <div style={{ minHeight:"100vh", background:"#F8FAFC", fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif", color:"#0F172A" }}>
       <style>{`
         @keyframes spin{to{transform:rotate(360deg)}}
         .ffd-tabs{display:flex;overflow-x:auto;scrollbar-width:none;-ms-overflow-style:none;}
@@ -1506,6 +1519,9 @@ CREATE POLICY "public_access" ON ffd_settings FOR ALL TO anon USING (true) WITH 
             <span className="ffd-fx-label" style={{ fontSize:12 }}>GBP→INR:</span>
             <input value={fxInput} onChange={e=>setFxInput(e.target.value)} onBlur={onFxBlur} style={{ width:60, padding:"4px 7px", border:"1px solid #BFDBFE", borderRadius:6, fontSize:13, outline:"none", background:"#EFF6FF", color:"#1D4ED8", fontWeight:600 }} />
           </div>
+          <button onClick={toggleMask} title={masked?"Show numbers":"Hide numbers"} style={{padding:"7px 12px",border:`1.5px solid ${masked?"#374151":"#CBD5E1"}`,borderRadius:8,background:masked?"#1E293B":"#F8FAFC",color:masked?"#fff":"#64748B",cursor:"pointer",fontSize:13,fontWeight:600,flexShrink:0,display:"flex",alignItems:"center",gap:5}}>
+            {masked?"🙈 Masked":"👁 Visible"}
+          </button>
           <button onClick={()=>setShowAdd(true)} style={{ ...styles.btnPrimary, padding:"8px 14px", fontSize:13, flexShrink:0 }}>+ Add</button>
         </div>
 
@@ -1542,7 +1558,8 @@ CREATE POLICY "public_access" ON ffd_settings FOR ALL TO anon USING (true) WITH 
       {showAdd    && <AddEntry onAdd={e=>{onAdd(e);setShowAdd(false);}} onClose={()=>setShowAdd(false)} />}
       {editE      && <EditModal entry={editE} onSave={onEdit} onClose={()=>setEditE(null)} />}
       {showChModal&& <ChannelModal ch={editCh} onSave={onSaveCh} onClose={()=>{setShowChModal(false);setEditCh(null);}} />}
-      {importAcct && <SmartImport accountId={importAcct} entries={entries} onDone={onImported} onClose={()=>setImportAcct(null)} />}
+      {importAcct && <SmartImport accountId={importAcct} entries={entries} onDone={onImported} onClose={()=>setImportAcct(null)} onLearn={onLearn}/>}
     </div>
+    </MaskCtx.Provider>
   );
 }
