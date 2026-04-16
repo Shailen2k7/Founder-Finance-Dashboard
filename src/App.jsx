@@ -1082,17 +1082,7 @@ function DashboardTab({ entries, channels, fxRate }) {
           </table>
         </div>
       </div>
-      {pageCount>1&&(
-        <div style={{display:"flex",justifyContent:"center",gap:6,marginTop:14,alignItems:"center",flexWrap:"wrap"}}>
-          <button onClick={()=>setPage(p=>Math.max(1,p-1))} disabled={page===1} style={{padding:"6px 12px",background:"#F1F5F9",border:"none",borderRadius:6,cursor:"pointer",fontSize:13,color:page===1?"#CBD5E1":"#4F46E5"}}>←</button>
-          {Array.from({length:Math.min(pageCount,7)},(_,i)=>{
-            const p=pageCount<=7?i+1:page<=4?i+1:page>=pageCount-3?pageCount-6+i:page-3+i;
-            return <button key={p} onClick={()=>setPage(p)} style={{padding:"6px 12px",background:page===p?"#4F46E5":"#F1F5F9",color:page===p?"#fff":"#374151",border:"none",borderRadius:6,cursor:"pointer",fontSize:13,fontWeight:page===p?700:400}}>{p}</button>;
-          })}
-          <button onClick={()=>setPage(p=>Math.min(pageCount,p+1))} disabled={page===pageCount} style={{padding:"6px 12px",background:"#F1F5F9",border:"none",borderRadius:6,cursor:"pointer",fontSize:13,color:page===pageCount?"#CBD5E1":"#4F46E5"}}>→</button>
-          <span style={{fontSize:12,color:"#94A3B8",marginLeft:6}}>Page {page} of {pageCount} · {rows.length} total</span>
-        </div>
-      )}
+
     </div>
   );
 }
@@ -1323,6 +1313,17 @@ function EntriesTab({ entries, fxRate, onEdit, onDelete }) {
           </tbody>
         </table>
       </div>
+      {pageCount>1&&(
+        <div style={{display:"flex",justifyContent:"center",gap:6,marginTop:14,alignItems:"center",flexWrap:"wrap"}}>
+          <button onClick={()=>setPage(p=>Math.max(1,p-1))} disabled={page===1} style={{padding:"6px 12px",background:"#F1F5F9",border:"none",borderRadius:6,cursor:"pointer",fontSize:13,color:page===1?"#CBD5E1":"#4F46E5"}}>←</button>
+          {Array.from({length:Math.min(pageCount,7)},(_,i)=>{
+            const p=pageCount<=7?i+1:page<=4?i+1:page>=pageCount-3?pageCount-6+i:page-3+i;
+            return <button key={p} onClick={()=>setPage(p)} style={{padding:"6px 12px",background:page===p?"#4F46E5":"#F1F5F9",color:page===p?"#fff":"#374151",border:"none",borderRadius:6,cursor:"pointer",fontSize:13,fontWeight:page===p?700:400}}>{p}</button>;
+          })}
+          <button onClick={()=>setPage(p=>Math.min(pageCount,p+1))} disabled={page===pageCount} style={{padding:"6px 12px",background:"#F1F5F9",border:"none",borderRadius:6,cursor:"pointer",fontSize:13,color:page===pageCount?"#CBD5E1":"#4F46E5"}}>→</button>
+          <span style={{fontSize:12,color:"#94A3B8",marginLeft:6}}>Page {page} of {pageCount} · {rows.length} total</span>
+        </div>
+      )}
     </div>
   );
 }
