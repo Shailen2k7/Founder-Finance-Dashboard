@@ -1,6 +1,8 @@
 // ═══════════════════════════════════════════════════════════════
-//  FOUNDER FINANCE OS  v4.0
+//  FOUNDER FINANCE OS  v4.1
 //  Premium · Decision-First · AI-Powered · Self-Learning
+//  v4.1 — full mobile responsive · universal export (PDF/Excel/CSV)
+//         with date range · auto duplicate detection
 // ═══════════════════════════════════════════════════════════════
 import { useState, useEffect, useCallback, useMemo, useRef, createContext, useContext } from "react";
 import { createClient } from "@supabase/supabase-js";
@@ -143,6 +145,83 @@ function exportXLSX(rows,filename="export.xlsx"){
   const data=[["Date","Business","Account","Type","Category","Description","Amount"],...rows.map(r=>[r.date,r.business,getAcct(r.account).label,r.type,r.category,r.description||"",r.amount])];
   const ws=XLSX.utils.aoa_to_sheet(data);const wb=XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb,ws,"Entries");XLSX.writeFile(wb,filename);
+}
+function esc(s){return String(s==null?"":s).replace(/[<>&"']/g,c=>({"<":"&lt;",">":"&gt;","&":"&amp;","\"":"&quot;","'":"&#39;"}[c]));}
+function exportPDF(rows,filename="export.pdf",meta={}){
+  const w=window.open("","_blank","width=900,height=700");
+  if(!w){alert("Popup blocked. Allow popups for this site to export PDF.");return;}
+  const inc=rows.filter(r=>r.type==="Income").reduce((s,r)=>s+Math.abs(Number(r.amount)||0),0);
+  const exp=rows.filter(r=>r.type==="Expense").reduce((s,r)=>s+Math.abs(Number(r.amount)||0),0);
+  const inr=n=>"₹"+Math.round(Math.abs(n)).toLocaleString("en-IN");
+  const title=meta.title||"Financial Report";
+  const rng=meta.range||"All time";
+  const html=`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(filename)}</title>
+<style>
+@page{size:A4;margin:14mm 10mm;}
+*{box-sizing:border-box;}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;color:#0F172A;margin:0;padding:24px;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+h1{font-size:22px;margin:0 0 4px;letterSpacing:-0.3px;}
+.meta{color:#64748B;font-size:11px;margin-bottom:18px;}
+.summary{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:18px;}
+.card{background:#F8FAFC;border:1px solid #E2E8F0;border-radius:8px;padding:10px 12px;}
+.card .lbl{font-size:9px;color:#64748B;text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin:0 0 4px;}
+.card .val{font-size:15px;font-weight:800;margin:0;}
+.in{color:#059669;}.out{color:#DC2626;}.net{color:#4F46E5;}
+table{width:100%;border-collapse:collapse;font-size:10px;margin-top:8px;}
+th{background:#F1F5F9;padding:7px 6px;text-align:left;font-weight:700;border-bottom:2px solid #CBD5E1;color:#475569;font-size:9px;text-transform:uppercase;letter-spacing:0.3px;white-space:nowrap;}
+td{padding:6px;border-bottom:1px solid #F1F5F9;vertical-align:top;}
+tr:nth-child(even) td{background:#FAFAFA;}
+.amt{text-align:right;white-space:nowrap;font-weight:700;}
+.desc{max-width:260px;overflow:hidden;text-overflow:ellipsis;}
+.badge{display:inline-block;padding:1px 6px;border-radius:10px;font-size:9px;font-weight:600;background:#EEF2FF;color:#4F46E5;}
+.footer{margin-top:18px;padding-top:10px;border-top:1px solid #E2E8F0;font-size:9px;color:#94A3B8;text-align:center;}
+.toolbar{position:fixed;top:10px;right:10px;display:flex;gap:8px;z-index:9999;}
+.toolbar button{padding:10px 18px;background:#4F46E5;color:#fff;border:none;border-radius:8px;cursor:pointer;font-weight:700;font-size:13px;box-shadow:0 6px 18px rgba(79,70,229,0.4);}
+.toolbar button.g{background:#64748B;box-shadow:none;}
+@media print{.toolbar{display:none!important;}body{padding:0;}}
+</style></head><body>
+<div class="toolbar"><button onclick="window.print()">🖨 Save as PDF</button><button class="g" onclick="window.close()">Close</button></div>
+<h1>Founder Finance OS — ${esc(title)}</h1>
+<div class="meta">Generated ${new Date().toLocaleString("en-IN")} · Period: ${esc(rng)} · ${rows.length} entries</div>
+<div class="summary">
+  <div class="card"><p class="lbl">Income</p><p class="val in">${inr(inc)}</p></div>
+  <div class="card"><p class="lbl">Expenses</p><p class="val out">${inr(exp)}</p></div>
+  <div class="card"><p class="lbl">Net</p><p class="val net">${(inc-exp)>=0?"+":"-"}${inr(inc-exp)}</p></div>
+  <div class="card"><p class="lbl">Entries</p><p class="val">${rows.length}</p></div>
+</div>
+<table><thead><tr>
+<th>Date</th><th>Business</th><th>Account</th><th>Type</th><th>Category</th><th>Description</th><th class="amt">Amount</th>
+</tr></thead><tbody>
+${rows.map(r=>`<tr>
+<td>${esc(r.date)}</td>
+<td><span class="badge" style="background:${(BIZ_CLR[r.business]||"#64748B")}22;color:${BIZ_CLR[r.business]||"#64748B"}">${esc(r.business||"")}</span></td>
+<td>${esc(getAcct(r.account).short||"")}</td>
+<td style="color:${r.type==="Income"?"#059669":"#DC2626"}">${esc(r.type)}</td>
+<td>${esc(r.category||"")}</td>
+<td class="desc">${esc(r.description||"")}</td>
+<td class="amt ${r.type==="Income"?"in":"out"}">${r.type==="Income"?"+":"-"}${getAcct(r.account).cur==="GBP"?"£"+Math.round(Math.abs(r.amount)).toLocaleString("en-GB"):inr(r.amount)}</td>
+</tr>`).join("")}
+</tbody></table>
+<div class="footer">Founder Finance OS · ${esc(filename)} · Confidential</div>
+<script>setTimeout(function(){try{window.focus();window.print();}catch(e){}},400);</script>
+</body></html>`;
+  w.document.open();w.document.write(html);w.document.close();
+}
+
+// ─── DUPLICATE DETECTION ───────────────────────────────────────────────────
+// Rule: same date + same rounded amount + same type = duplicate.
+// Keeps the oldest entry (lowest id) as canonical, hides the rest.
+function dupKey(e){return `${e.date}||${Math.round(Math.abs(Number(e.amount)||0))}||${e.type}`;}
+function dedupeEntries(entries){
+  const seen=new Set();const out=[];
+  const sorted=[...entries].sort((a,b)=>(Number(a.id)||0)-(Number(b.id)||0));
+  for(const e of sorted){const k=dupKey(e);if(seen.has(k))continue;seen.add(k);out.push(e);}
+  return out;
+}
+function findDuplicateGroups(entries){
+  const groups={};
+  entries.forEach(e=>{const k=dupKey(e);(groups[k]=groups[k]||[]).push(e);});
+  return Object.values(groups).filter(g=>g.length>1).map(g=>g.sort((a,b)=>(Number(a.id)||0)-(Number(b.id)||0)));
 }
 
 // ─── COLUMN DETECTION ─────────────────────────────────────────────────────────
@@ -392,7 +471,7 @@ function SmartImport({accountId,entries,onDone,onClose,onLearn}){
 // ═══════════════════════════════════════════════════════════════════════════════
 //  DASHBOARD TAB  —  Premium design, greeting, 4-column KPIs, flags, charts
 // ═══════════════════════════════════════════════════════════════════════════════
-function DashboardTab({entries,channels,fxRate,onTabChange,onImport}){
+function DashboardTab({entries,channels,fxRate,onTabChange,onImport,onExport}){
   const masked=useMask();
   const fe=useCallback(e=>fxAmt(e,fxRate),[fxRate]);
   const [flagModal,setFlagModal]=useState(null); // {type:"green"|"red", list:[]}
@@ -467,9 +546,8 @@ function DashboardTab({entries,channels,fxRate,onTabChange,onImport}){
           <p style={{fontSize:22,fontWeight:800,color:"#0F172A",margin:"0 0 2px"}}>{greeting}</p>
           <p style={{fontSize:14,color:"#64748B",margin:0}}>Here's your financial snapshot · {new Date().toLocaleDateString("en-IN",{weekday:"long",day:"numeric",month:"long"})}</p>
         </div>
-        <div style={{display:"flex",gap:8}}>
-          <button onClick={()=>exportCSV(entries,"dashboard.csv")} style={{...S.btnGhost,fontSize:12,padding:"8px 14px"}}>↓ CSV</button>
-          <button onClick={()=>exportXLSX(entries,"founder-finance.xlsx")} style={{...S.btnPrimary,fontSize:12,padding:"8px 14px"}}>↓ Excel</button>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+          <button onClick={()=>onExport({title:"Dashboard Export",rows:entries})} style={{...S.btnPrimary,fontSize:12,padding:"8px 14px"}}>↓ Export</button>
         </div>
       </div>
 
@@ -525,11 +603,11 @@ function DashboardTab({entries,channels,fxRate,onTabChange,onImport}){
       </div>
 
       {/* Charts row */}
-      <div style={{display:"grid",gridTemplateColumns:"1.6fr 1fr",gap:14,marginBottom:20}} className="two-col">
+      <div style={{gap:14,marginBottom:20}} className="two-col-wide">
         <div style={{background:"#fff",borderRadius:14,border:"1px solid #E2E8F0",padding:"18px 20px"}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
             <div><p style={{fontWeight:700,fontSize:15,color:"#0F172A",margin:"0 0 2px"}}>Cash Flow Timeline</p><p style={{fontSize:12,color:"#94A3B8",margin:0}}>Monthly income vs expenses</p></div>
-            <button onClick={()=>exportCSV(entries,"cashflow.csv")} style={{...S.btnGhost,fontSize:11,padding:"6px 10px"}}>↓ Export</button>
+            <button onClick={()=>onExport({title:"Cash Flow",rows:entries})} style={{...S.btnGhost,fontSize:11,padding:"6px 10px"}}>↓ Export</button>
           </div>
           <ResponsiveContainer width="100%" height={200}>
             <AreaChart data={monthly} margin={{top:5,right:5,left:-20,bottom:0}}>
@@ -603,7 +681,7 @@ function DashboardTab({entries,channels,fxRate,onTabChange,onImport}){
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,flexWrap:"wrap",gap:8}}>
           <div><p style={{fontWeight:700,fontSize:15,color:"#0F172A",margin:"0 0 2px"}}>Recent Transactions</p><p style={{fontSize:12,color:"#94A3B8",margin:0}}>Latest {recentTxns.length} entries</p></div>
           <div style={{display:"flex",gap:8}}>
-            <button onClick={()=>exportCSV(recentTxns,"recent.csv")} style={{...S.btnGhost,fontSize:11,padding:"6px 10px"}}>↓ Export</button>
+            <button onClick={()=>onExport({title:"Recent Transactions",rows:recentTxns})} style={{...S.btnGhost,fontSize:11,padding:"6px 10px"}}>↓ Export</button>
             <button onClick={()=>onTabChange("entries")} style={{...S.btnPrimary,fontSize:12,padding:"7px 14px"}}>See all →</button>
           </div>
         </div>
@@ -767,7 +845,7 @@ Monthly:${monthly.map(m=>`${m.month}(In:Rs${Math.round(m.inc/1000)}k,Exp:Rs${Mat
 // ═══════════════════════════════════════════════════════════════════════════════
 //  ENTRIES TAB  —  Search · Filters · Pagination · Export everywhere
 // ═══════════════════════════════════════════════════════════════════════════════
-function EntriesTab({entries,fxRate,onEdit,onDelete,filterAccount}){
+function EntriesTab({entries,fxRate,onEdit,onDelete,filterAccount,onExport}){
   const masked=useMask();
   const fe=useCallback(e=>fxAmt(e,fxRate),[fxRate]);
   const [bizF,setBizF]=useState("All");
@@ -826,9 +904,8 @@ function EntriesTab({entries,fxRate,onEdit,onDelete,filterAccount}){
           <span style={{fontSize:13,color:"#DC2626",fontWeight:700}}>↓ {masked?"••••":fmt(totOut)}</span>
           <span style={{fontSize:13,color:"#4F46E5",fontWeight:700}}>Net: {masked?"••••":fmt(totIn-totOut)}</span>
         </div>
-        <div style={{display:"flex",gap:8}}>
-          <button onClick={()=>exportCSV(rows,`entries${dateFrom?"-"+dateFrom:""}.csv`)} style={{...S.btnGhost,fontSize:12,padding:"7px 12px"}}>↓ CSV</button>
-          <button onClick={()=>exportXLSX(rows,`entries${dateFrom?"-"+dateFrom:""}.xlsx`)} style={{...S.btnPrimary,fontSize:12,padding:"7px 12px"}}>↓ Excel</button>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+          <button onClick={()=>onExport({title:"Filtered Entries",rows,range:dateFrom||dateTo?`${dateFrom||"start"} → ${dateTo||"today"}`:"All time"})} style={{...S.btnPrimary,fontSize:12,padding:"7px 14px"}}>↓ Export</button>
         </div>
       </div>
 
@@ -877,7 +954,7 @@ function EntriesTab({entries,fxRate,onEdit,onDelete,filterAccount}){
 // ═══════════════════════════════════════════════════════════════════════════════
 //  ACCOUNTS TAB  —  Clickable cards, per-account ledger, import button
 // ═══════════════════════════════════════════════════════════════════════════════
-function AccountsTab({entries,fxRate,onEdit,onDelete,onImport,onViewEntries}){
+function AccountsTab({entries,fxRate,onEdit,onDelete,onImport,onViewEntries,onExport}){
   const masked=useMask();
   const [acctId,setAcctId]=useState(null); // null = show all cards
 
@@ -941,9 +1018,8 @@ function AccountsTab({entries,fxRate,onEdit,onDelete,onImport,onViewEntries}){
       </div>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8}}>
         <p style={{fontWeight:700,fontSize:15,color:"#0F172A",margin:0}}>{a.label} — {a.rows.length} entries</p>
-        <div style={{display:"flex",gap:8}}>
-          <button onClick={()=>exportCSV(a.rows,`${a.id}-statement.csv`)} style={{...S.btnGhost,fontSize:12,padding:"8px 12px"}}>↓ CSV</button>
-          <button onClick={()=>exportXLSX(a.rows,`${a.id}-statement.xlsx`)} style={{...S.btnGhost,fontSize:12,padding:"8px 12px"}}>↓ Excel</button>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+          <button onClick={()=>onExport({title:`${a.label} Statement`,rows:a.rows})} style={{...S.btnGhost,fontSize:12,padding:"8px 12px"}}>↓ Export</button>
           <button onClick={()=>onImport(a.id)} style={{...S.btnPrimary,fontSize:13,padding:"9px 16px"}}>📥 Import Statement</button>
         </div>
       </div>
@@ -972,7 +1048,7 @@ function AccountsTab({entries,fxRate,onEdit,onDelete,onImport,onViewEntries}){
 // ═══════════════════════════════════════════════════════════════════════════════
 //  CHANNELS TAB
 // ═══════════════════════════════════════════════════════════════════════════════
-function ChannelsTab({entries,channels,fxRate,onEditCh,onDelCh,onAddCh}){
+function ChannelsTab({entries,channels,fxRate,onEditCh,onDelCh,onAddCh,onExport}){
   const masked=useMask();
   const fe=useCallback(e=>fxAmt(e,fxRate),[fxRate]);
   const opRev=useMemo(()=>entries.filter(e=>e.type==="Income"&&OP_CATS.includes(e.category)).reduce((s,e)=>s+fe(e),0),[entries,fe]);
@@ -1000,7 +1076,7 @@ function ChannelsTab({entries,channels,fxRate,onEditCh,onDelCh,onAddCh}){
       <div style={{background:"#fff",borderRadius:14,border:"1px solid #E2E8F0",padding:"18px 20px"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
           <p style={{fontWeight:700,fontSize:15,color:"#0F172A",margin:0}}>Income by Category</p>
-          <button onClick={()=>exportCSV(entries.filter(e=>e.type==="Income"),"income.csv")} style={{...S.btnGhost,fontSize:12,padding:"6px 12px"}}>↓ Export</button>
+          <button onClick={()=>onExport({title:"Income by Category",rows:entries.filter(e=>e.type==="Income")})} style={{...S.btnGhost,fontSize:12,padding:"6px 12px"}}>↓ Export</button>
         </div>
         <div style={{overflowX:"auto"}}>
           <table style={{width:"100%",borderCollapse:"collapse",minWidth:360}}>
@@ -1027,6 +1103,192 @@ function ChannelsTab({entries,channels,fxRate,onEditCh,onDelCh,onAddCh}){
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+//  EXPORT MODAL — Universal date-range + format picker (PDF/Excel/CSV)
+// ═══════════════════════════════════════════════════════════════════════════════
+function ExportModal({defaults,entries,accounts,fxRate,onClose}){
+  const today=todayStr();
+  const [title,setTitle]=useState(defaults?.title||"Founder Finance Export");
+  const [preset,setPreset]=useState(defaults?.rows?"custom":"all");
+  const [from,setFrom]=useState("");
+  const [to,setTo]=useState("");
+  const [biz,setBiz]=useState("All");
+  const [acc,setAcc]=useState("All");
+  const [typ,setTyp]=useState("All");
+  const [format,setFormat]=useState("pdf");
+  const [busy,setBusy]=useState(false);
+
+  const applyPreset=(p)=>{
+    setPreset(p);
+    const d=new Date();const y=d.getFullYear();const m=d.getMonth();
+    const pad=n=>String(n).padStart(2,"0");
+    const lastDay=(yr,mo)=>new Date(yr,mo+1,0).getDate();
+    if(p==="today"){setFrom(today);setTo(today);}
+    else if(p==="this_week"){const w=new Date(d);w.setDate(d.getDate()-d.getDay());setFrom(`${w.getFullYear()}-${pad(w.getMonth()+1)}-${pad(w.getDate())}`);setTo(today);}
+    else if(p==="this_month"){setFrom(`${y}-${pad(m+1)}-01`);setTo(today);}
+    else if(p==="last_month"){const ly=m===0?y-1:y;const lm=m===0?11:m-1;setFrom(`${ly}-${pad(lm+1)}-01`);setTo(`${ly}-${pad(lm+1)}-${pad(lastDay(ly,lm))}`);}
+    else if(p==="this_quarter"){const qs=Math.floor(m/3)*3;setFrom(`${y}-${pad(qs+1)}-01`);setTo(today);}
+    else if(p==="last_quarter"){const qs=Math.floor(m/3)*3-3;const ly=qs<0?y-1:y;const lqs=qs<0?qs+12:qs;setFrom(`${ly}-${pad(lqs+1)}-01`);setTo(`${ly}-${pad(lqs+3)}-${pad(lastDay(ly,lqs+2))}`);}
+    else if(p==="ytd"){setFrom(`${y}-01-01`);setTo(today);}
+    else if(p==="all"){setFrom("");setTo("");}
+    else if(p==="custom"){/* keep current */}
+  };
+
+  // If defaults.rows is provided (e.g. already-filtered list from a tab), use it directly.
+  // Otherwise filter the full entries set by UI controls.
+  const filtered=useMemo(()=>{
+    const src=defaults?.rows&&preset==="custom"&&!from&&!to&&biz==="All"&&acc==="All"&&typ==="All"?defaults.rows:entries;
+    return src.filter(e=>
+      (!from||e.date>=from)&&
+      (!to||e.date<=to)&&
+      (biz==="All"||e.business===biz)&&
+      (acc==="All"||e.account===acc)&&
+      (typ==="All"||e.type===typ)
+    ).sort((a,b)=>b.date.localeCompare(a.date));
+  },[entries,defaults,preset,from,to,biz,acc,typ]);
+
+  const inc=filtered.filter(r=>r.type==="Income").reduce((s,r)=>s+Math.abs(Number(r.amount)||0),0);
+  const exp=filtered.filter(r=>r.type==="Expense").reduce((s,r)=>s+Math.abs(Number(r.amount)||0),0);
+
+  const doDownload=()=>{
+    if(filtered.length===0){alert("No entries match these filters.");return;}
+    setBusy(true);
+    const stamp=new Date().toISOString().split("T")[0];
+    const base=title.replace(/[^A-Za-z0-9]+/g,"-").toLowerCase()||"export";
+    const rng=from||to?`${from||"start"} → ${to||"today"}`:(preset==="all"?"All time":preset.replace(/_/g," "));
+    try{
+      if(format==="pdf")exportPDF(filtered,`${base}-${stamp}.pdf`,{title,range:rng});
+      else if(format==="xlsx")exportXLSX(filtered,`${base}-${stamp}.xlsx`);
+      else exportCSV(filtered,`${base}-${stamp}.csv`);
+      setTimeout(()=>{setBusy(false);onClose();},300);
+    }catch(err){alert("Export failed: "+err.message);setBusy(false);}
+  };
+
+  const presetBtn=(key,lbl)=>(
+    <button key={key} onClick={()=>applyPreset(key)} style={{padding:"7px 12px",borderRadius:20,fontSize:12,cursor:"pointer",border:preset===key?"1.5px solid #4F46E5":"1px solid #E2E8F0",background:preset===key?"#EEF2FF":"#fff",color:preset===key?"#4F46E5":"#475569",fontWeight:preset===key?700:500,whiteSpace:"nowrap"}}>{lbl}</button>
+  );
+
+  return(
+    <div style={S.overlay} onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div style={{background:"#fff",borderRadius:18,padding:"22px 24px",width:"calc(100% - 24px)",maxWidth:560,maxHeight:"92vh",overflowY:"auto",boxShadow:"0 25px 60px rgba(0,0,0,0.22)"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18}}>
+          <div><p style={{fontWeight:800,fontSize:18,margin:"0 0 2px",color:"#0F172A"}}>↓ Export Transactions</p><p style={{fontSize:12,color:"#64748B",margin:0}}>Choose date range & format</p></div>
+          <button onClick={onClose} style={S.closeBtn}>✕</button>
+        </div>
+
+        <label style={S.formLabel}>Report Title</label>
+        <input value={title} onChange={e=>setTitle(e.target.value)} style={{...S.input,marginBottom:16}}/>
+
+        <label style={S.formLabel}>Quick Range</label>
+        <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:12}}>
+          {presetBtn("today","Today")}
+          {presetBtn("this_week","This Week")}
+          {presetBtn("this_month","This Month")}
+          {presetBtn("last_month","Last Month")}
+          {presetBtn("this_quarter","This Quarter")}
+          {presetBtn("last_quarter","Last Quarter")}
+          {presetBtn("ytd","Year to Date")}
+          {presetBtn("all","All Time")}
+          {presetBtn("custom","Custom")}
+        </div>
+
+        <div className="modal-form-grid" style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
+          <div><label style={S.formLabel}>From</label><input type="date" value={from} onChange={e=>{setFrom(e.target.value);setPreset("custom");}} style={S.input}/></div>
+          <div><label style={S.formLabel}>To</label><input type="date" value={to} onChange={e=>{setTo(e.target.value);setPreset("custom");}} style={S.input}/></div>
+        </div>
+
+        <div className="stack-mobile-3" style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:16}}>
+          <div><label style={S.formLabel}>Business</label><select value={biz} onChange={e=>setBiz(e.target.value)} style={S.select}><option>All</option>{BUSINESSES.map(b=><option key={b}>{b}</option>)}</select></div>
+          <div><label style={S.formLabel}>Account</label><select value={acc} onChange={e=>setAcc(e.target.value)} style={S.select}><option value="All">All</option>{ACCOUNTS.map(a=><option key={a.id} value={a.id}>{a.short}</option>)}</select></div>
+          <div><label style={S.formLabel}>Type</label><select value={typ} onChange={e=>setTyp(e.target.value)} style={S.select}><option>All</option><option>Income</option><option>Expense</option></select></div>
+        </div>
+
+        <div style={{background:"#F8FAFC",border:"1px solid #E2E8F0",borderRadius:10,padding:"10px 14px",marginBottom:16,display:"flex",gap:14,flexWrap:"wrap"}}>
+          <span style={{fontSize:13,fontWeight:700,color:"#0F172A"}}>{filtered.length} entries</span>
+          <span style={{fontSize:13,color:"#059669",fontWeight:600}}>↑ {fmt(inc)}</span>
+          <span style={{fontSize:13,color:"#DC2626",fontWeight:600}}>↓ {fmt(exp)}</span>
+          <span style={{fontSize:13,color:"#4F46E5",fontWeight:700,marginLeft:"auto"}}>Net: {fmt(inc-exp)}</span>
+        </div>
+
+        <label style={S.formLabel}>Format</label>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:18}}>
+          {[["pdf","📄","PDF","Print-ready"],["xlsx","📊","Excel",".xlsx"],["csv","📑","CSV",".csv"]].map(([k,icon,lbl,sub])=>(
+            <button key={k} onClick={()=>setFormat(k)} style={{padding:"12px 8px",borderRadius:10,border:format===k?"2px solid #4F46E5":"1.5px solid #E2E8F0",background:format===k?"#EEF2FF":"#fff",cursor:"pointer",textAlign:"center"}}>
+              <div style={{fontSize:22,marginBottom:4}}>{icon}</div>
+              <div style={{fontSize:13,fontWeight:700,color:format===k?"#4F46E5":"#0F172A"}}>{lbl}</div>
+              <div style={{fontSize:10,color:"#64748B",marginTop:2}}>{sub}</div>
+            </button>
+          ))}
+        </div>
+
+        <div style={{display:"flex",gap:8}}>
+          <button onClick={onClose} style={{...S.btnGhost,flex:1}}>Cancel</button>
+          <button onClick={doDownload} disabled={busy||filtered.length===0} style={{...S.btnPrimary,flex:2,opacity:busy||filtered.length===0?0.5:1}}>{busy?"Preparing…":`↓ Download (${filtered.length})`}</button>
+        </div>
+        {format==="pdf"&&<p style={{fontSize:11,color:"#64748B",margin:"10px 0 0",textAlign:"center",lineHeight:1.5}}>A print window will open. Tap <b>Save as PDF</b> in the print dialog to save the file to your device.</p>}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  DUPLICATES MODAL — Review, keep/delete likely duplicate entries
+// ═══════════════════════════════════════════════════════════════════════════════
+function DuplicatesModal({groups,onDelete,onClose}){
+  const total=groups.reduce((s,g)=>s+(g.length-1),0);
+  return(
+    <div style={S.overlay} onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div style={{background:"#fff",borderRadius:18,padding:"22px 24px",width:"calc(100% - 24px)",maxWidth:720,maxHeight:"92vh",overflowY:"auto",boxShadow:"0 25px 60px rgba(0,0,0,0.22)"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+          <div>
+            <p style={{fontWeight:800,fontSize:18,margin:"0 0 2px",color:"#0F172A"}}>🔁 Duplicate Review</p>
+            <p style={{fontSize:12,color:"#64748B",margin:0}}>{groups.length} groups · {total} entries hidden from calculations</p>
+          </div>
+          <button onClick={onClose} style={S.closeBtn}>✕</button>
+        </div>
+
+        {groups.length===0?(
+          <div style={{padding:"40px 20px",textAlign:"center"}}>
+            <div style={{fontSize:48,marginBottom:12}}>✨</div>
+            <p style={{fontSize:16,fontWeight:700,color:"#0F172A",margin:"0 0 4px"}}>No duplicates found</p>
+            <p style={{fontSize:13,color:"#64748B",margin:0}}>Your ledger is clean.</p>
+          </div>
+        ):(
+          <>
+            <div style={{background:"#FFFBEB",border:"1px solid #FDE68A",borderRadius:10,padding:"10px 14px",fontSize:12,color:"#78350F",marginBottom:14,lineHeight:1.6}}>
+              💡 Entries with same date, amount & type are treated as duplicates. The oldest one is kept; the rest are hidden from all totals. Review each group and delete any that shouldn't be there.
+            </div>
+            {groups.map((g,idx)=>(
+              <div key={idx} style={{border:"1px solid #E2E8F0",borderRadius:12,marginBottom:12,overflow:"hidden"}}>
+                <div style={{background:"#F8FAFC",padding:"8px 14px",borderBottom:"1px solid #E2E8F0",fontSize:12,fontWeight:700,color:"#475569"}}>
+                  {g[0].date} · {g[0].type} · {fmt(Math.abs(Number(g[0].amount)||0))} · <span style={{color:"#DC2626"}}>{g.length} entries</span>
+                </div>
+                <div style={{overflowX:"auto"}}>
+                  <table style={{width:"100%",borderCollapse:"collapse",fontSize:12,minWidth:520}}>
+                    <thead><tr style={{background:"#fff"}}><th style={S.th}>Status</th><th style={S.th}>Business</th><th style={S.th}>Account</th><th style={S.th}>Category</th><th style={S.th}>Description</th><th style={S.th}/></tr></thead>
+                    <tbody>
+                      {g.map((e,i)=>(
+                        <tr key={e.id} style={{background:i===0?"#F0FDF4":"#fff",borderTop:"1px solid #F1F5F9"}}>
+                          <td style={S.td}>{i===0?<span style={{...S.badge,background:"#DCFCE7",color:"#166534",fontSize:10}}>✓ KEPT</span>:<span style={{...S.badge,background:"#FEF9C3",color:"#713F12",fontSize:10}}>HIDDEN</span>}</td>
+                          <td style={S.td}><span style={{...S.badge,background:(BIZ_CLR[e.business]||"#64748B")+"22",color:BIZ_CLR[e.business]||"#64748B",fontSize:11}}>{e.business}</span></td>
+                          <td style={{...S.td,fontSize:11}}>{getAcct(e.account).short}</td>
+                          <td style={{...S.td,fontSize:11}}>{e.category}</td>
+                          <td style={{...S.td,fontSize:11,maxWidth:200,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={e.description}>{e.description}</td>
+                          <td style={S.td}><button onClick={()=>onDelete(e.id)} style={{padding:"4px 10px",background:"#FEE2E2",border:"none",borderRadius:6,fontSize:11,color:"#DC2626",fontWeight:600,cursor:"pointer"}}>Delete</button></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ))}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 //  MODALS
 // ═══════════════════════════════════════════════════════════════════════════════
 function AddEntry({onAdd,onClose}){
@@ -1047,7 +1309,7 @@ function AddEntry({onAdd,onClose}){
     <div style={S.overlay} onClick={e=>e.target===e.currentTarget&&onClose()}>
       <div style={{background:"#fff",borderRadius:18,padding:28,width:"calc(100% - 32px)",maxWidth:520,boxShadow:"0 25px 60px rgba(0,0,0,0.18)"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}><p style={{fontWeight:800,fontSize:18,margin:0,color:"#0F172A"}}>+ New Entry</p><button onClick={onClose} style={S.closeBtn}>✕</button></div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:20}}>
+        <div className="modal-form-grid" style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:20}}>
           <div><label style={S.formLabel}>Date</label><input type="date" style={S.input} value={date} onChange={e=>setDate(e.target.value)}/></div>
           <div><label style={S.formLabel}>Business</label><select style={S.select} value={biz} onChange={e=>setBiz(e.target.value)}>{BUSINESSES.map(b=><option key={b}>{b}</option>)}</select></div>
           <div><label style={S.formLabel}>Account</label><select style={S.select} value={acc} onChange={e=>setAcc(e.target.value)}>{ACCOUNTS.map(a=><option key={a.id} value={a.id}>{a.label}</option>)}</select></div>
@@ -1070,7 +1332,7 @@ function EditModal({entry,onSave,onClose}){
     <div style={S.overlay} onClick={ev=>ev.target===ev.currentTarget&&onClose()}>
       <div style={{background:"#fff",borderRadius:18,padding:28,width:"calc(100% - 32px)",maxWidth:520,boxShadow:"0 25px 60px rgba(0,0,0,0.18)"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}><p style={{fontWeight:800,fontSize:18,margin:0,color:"#0F172A"}}>Edit Entry</p><button onClick={onClose} style={S.closeBtn}>✕</button></div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:20}}>
+        <div className="modal-form-grid" style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:20}}>
           <div><label style={S.formLabel}>Date</label><input type="date" style={S.input} value={e.date} onChange={ev=>s("date",ev.target.value)}/></div>
           <div><label style={S.formLabel}>Business</label><select style={S.select} value={e.business} onChange={ev=>s("business",ev.target.value)}>{BUSINESSES.map(b=><option key={b}>{b}</option>)}</select></div>
           <div><label style={S.formLabel}>Account</label><select style={S.select} value={e.account} onChange={ev=>s("account",ev.target.value)}>{ACCOUNTS.map(a=><option key={a.id} value={a.id}>{a.label}</option>)}</select></div>
@@ -1091,7 +1353,7 @@ function ChannelModal({ch,onSave,onClose}){
     <div style={S.overlay} onClick={e=>e.target===e.currentTarget&&onClose()}>
       <div style={{background:"#fff",borderRadius:18,padding:28,width:"calc(100% - 32px)",maxWidth:460,boxShadow:"0 25px 60px rgba(0,0,0,0.18)"}}>
         <p style={{fontWeight:800,fontSize:18,margin:"0 0 20px",color:"#0F172A"}}>{ch?"Edit":"Add"} Channel</p>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:20}}>
+        <div className="modal-form-grid" style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:20}}>
           <div style={{gridColumn:"span 2"}}><label style={S.formLabel}>Channel Name</label><input style={S.input} value={d.name} onChange={e=>setD(p=>({...p,name:e.target.value}))} placeholder="e.g. Amazon India"/></div>
           <div><label style={S.formLabel}>Business</label><select style={S.select} value={d.biz} onChange={e=>setD(p=>({...p,biz:e.target.value}))}>{BUSINESSES.map(b=><option key={b}>{b}</option>)}</select></div>
           <div><label style={S.formLabel}>Colour</label><input type="color" value={d.clr} onChange={e=>setD(p=>({...p,clr:e.target.value}))} style={{...S.input,padding:4,height:42}}/></div>
@@ -1146,6 +1408,9 @@ export default function App(){
   const [showChModal,setShowChModal]=useState(false);
   const [importAcct,setImportAcct]=useState(null);
   const [filterAcct,setFilterAcct]=useState(null);
+  const [hideDups,setHideDups]=useState(true);
+  const [showDupModal,setShowDupModal]=useState(false);
+  const [exportReq,setExportReq]=useState(null); // {title, rows?, range?}
 
   useEffect(()=>{
     if(!authed)return;
@@ -1173,7 +1438,10 @@ export default function App(){
     })();
   },[authed]);
 
-  const netFlow=useMemo(()=>entries.reduce((s,e)=>s+(e.type==="Income"?1:-1)*fxAmt(e,fxRate),0),[entries,fxRate]);
+  const dupGroups=useMemo(()=>findDuplicateGroups(entries),[entries]);
+  const effectiveEntries=useMemo(()=>hideDups?dedupeEntries(entries):entries,[entries,hideDups]);
+  const dupHiddenCount=entries.length-effectiveEntries.length;
+  const netFlow=useMemo(()=>effectiveEntries.reduce((s,e)=>s+(e.type==="Income"?1:-1)*fxAmt(e,fxRate),0),[effectiveEntries,fxRate]);
 
   const onAdd   =e=>{setEntries(p=>[e,...p]);};
   const onEdit  =async e=>{await dbUpdate(e);setEntries(p=>p.map(r=>r.id===e.id?e:r));setEditE(null);};
@@ -1238,45 +1506,88 @@ CREATE POLICY "public_access" ON ffd_settings FOR ALL TO anon USING (true) WITH 
         <style>{`
           @keyframes spin{to{transform:rotate(360deg)}}
           *{box-sizing:border-box;}
-          .kpi-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;}
-          .two-col{display:grid;grid-template-columns:1fr 1fr;gap:14px;}
-          .three-col{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;}
-          @media(max-width:1200px){.kpi-grid{grid-template-columns:repeat(2,1fr);}}
+
+          /* Grid system — classes win over inline via !important */
+          .kpi-grid{display:grid!important;grid-template-columns:repeat(4,1fr)!important;gap:14px!important;}
+          .two-col{display:grid!important;grid-template-columns:1fr 1fr!important;gap:14px!important;}
+          .two-col-wide{display:grid!important;grid-template-columns:1.6fr 1fr!important;gap:14px!important;}
+          .three-col{display:grid!important;grid-template-columns:repeat(3,1fr)!important;gap:14px!important;}
+          .four-col{display:grid!important;grid-template-columns:repeat(4,1fr)!important;gap:14px!important;}
+
+          tr:hover td{background:#F8FAFC;}
+
+          /* ≤1200px — shrink 4-col to 2-col */
+          @media(max-width:1200px){
+            .kpi-grid,.four-col{grid-template-columns:repeat(2,1fr)!important;}
+          }
+          /* ≤900px — shrink 3-col to 2-col; keep two-col-wide at 2col until mobile */
+          @media(max-width:900px){
+            .three-col{grid-template-columns:repeat(2,1fr)!important;}
+            .two-col-wide{grid-template-columns:1fr!important;}
+          }
+          /* ≤768px — tablet & below: single column, mobile nav, compact */
           @media(max-width:768px){
-            .kpi-grid{grid-template-columns:1fr 1fr;}
-            .two-col{grid-template-columns:1fr;}
-            .three-col{grid-template-columns:1fr 1fr;}
+            .kpi-grid,.four-col,.three-col,.two-col,.two-col-wide{grid-template-columns:1fr!important;gap:10px!important;}
             .desktop-nav{display:none!important;}
             .mobile-nav{display:flex!important;}
-            .content-pad{padding:12px 12px 80px!important;}
+            .content-pad{padding:14px 12px 90px!important;}
+            .topbar-row{flex-wrap:wrap!important;gap:6px!important;height:auto!important;padding:10px 12px!important;}
+            .topbar-brand{order:1;flex:1 1 60%!important;min-width:0!important;}
+            .topbar-actions{order:2;display:flex;gap:6px;flex-wrap:wrap;align-items:center;}
+            .hide-mobile{display:none!important;}
+            .show-mobile{display:inline-flex!important;}
+            .mobile-compact-table{font-size:11px!important;}
+            .mobile-compact-table th,.mobile-compact-table td{padding:7px 6px!important;}
+            .greeting-row{flex-direction:column!important;align-items:flex-start!important;}
+            .greeting-row > div:last-child{width:100%!important;}
+            .filter-chip{padding:4px 10px!important;font-size:11px!important;}
           }
-          @media(max-width:480px){.kpi-grid{grid-template-columns:1fr;}.three-col{grid-template-columns:1fr;}}
-          tr:hover td{background:#F8FAFC;}
+          /* ≤480px — small mobile */
+          @media(max-width:480px){
+            .kpi-grid,.four-col{grid-template-columns:repeat(2,1fr)!important;}
+            .content-pad{padding:10px 10px 90px!important;}
+            .stack-mobile-3{grid-template-columns:1fr!important;}
+            .modal-form-grid{grid-template-columns:1fr!important;gap:10px!important;}
+          }
+          /* ≤380px — tiny screens */
+          @media(max-width:380px){
+            .kpi-grid,.four-col{grid-template-columns:1fr!important;}
+            body{font-size:13px;}
+          }
+          .show-mobile{display:none;}
         `}</style>
 
         {/* Top bar */}
         <div style={{background:"#fff",borderBottom:"1px solid #E2E8F0",position:"sticky",top:0,zIndex:100}}>
-          <div style={{maxWidth:1440,margin:"0 auto",padding:"0 20px",display:"flex",alignItems:"center",gap:12,height:58}}>
-            <div style={{width:36,height:36,background:"linear-gradient(135deg,#4F46E5,#7C3AED)",borderRadius:10,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,flexShrink:0}}>📊</div>
-            <div style={{flex:1,minWidth:0}}>
-              <p style={{fontWeight:900,fontSize:14,margin:0,lineHeight:1,letterSpacing:-0.3,color:"#0F172A"}}>Founder Finance OS</p>
-              <p style={{fontSize:11,color:"#64748B",margin:0}}>{entries.length} entries · Net: <span style={{color:netFlow>=0?"#059669":"#DC2626",fontWeight:700}}>{masked?"₹ ••••":fmt(netFlow)}</span></p>
+          <div className="topbar-row" style={{maxWidth:1440,margin:"0 auto",padding:"0 20px",display:"flex",alignItems:"center",gap:12,height:58}}>
+            <div className="topbar-brand" style={{display:"flex",alignItems:"center",gap:10,flex:1,minWidth:0}}>
+              <div style={{width:36,height:36,background:"linear-gradient(135deg,#4F46E5,#7C3AED)",borderRadius:10,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,flexShrink:0}}>📊</div>
+              <div style={{flex:1,minWidth:0}}>
+                <p style={{fontWeight:900,fontSize:14,margin:0,lineHeight:1.1,letterSpacing:-0.3,color:"#0F172A",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>Founder Finance OS</p>
+                <p style={{fontSize:11,color:"#64748B",margin:"2px 0 0",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{effectiveEntries.length} entries · Net: <span style={{color:netFlow>=0?"#059669":"#DC2626",fontWeight:700}}>{masked?"₹ ••••":fmt(netFlow)}</span></p>
+              </div>
             </div>
-            <div style={{display:"flex",alignItems:"center",gap:5,fontSize:12,color:"#64748B",flexShrink:0}}>
-              <span style={{fontSize:11}}>£→₹</span>
-              <input value={fxInput} onChange={e=>setFxInput(e.target.value)} onBlur={onFxBlur} style={{width:52,padding:"4px 6px",border:"1px solid #BFDBFE",borderRadius:6,fontSize:12,outline:"none",background:"#EFF6FF",color:"#1D4ED8",fontWeight:700}}/>
+            <div className="topbar-actions" style={{display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
+              {dupHiddenCount>0&&(
+                <button onClick={()=>setShowDupModal(true)} title={`${dupHiddenCount} duplicate entries hidden. Click to review.`} style={{padding:"6px 10px",border:"1px solid #FDE68A",borderRadius:8,background:"#FFFBEB",color:"#92400E",cursor:"pointer",fontSize:11,fontWeight:700,whiteSpace:"nowrap"}}>🔁 {dupHiddenCount}</button>
+              )}
+              <div className="hide-mobile" style={{display:"flex",alignItems:"center",gap:5,fontSize:12,color:"#64748B"}}>
+                <span style={{fontSize:11}}>£→₹</span>
+                <input value={fxInput} onChange={e=>setFxInput(e.target.value)} onBlur={onFxBlur} style={{width:52,padding:"4px 6px",border:"1px solid #BFDBFE",borderRadius:6,fontSize:12,outline:"none",background:"#EFF6FF",color:"#1D4ED8",fontWeight:700}}/>
+              </div>
+              <button onClick={toggleMask} title={masked?"Amounts are hidden":"Amounts are visible"} style={{padding:"6px 10px",border:`1.5px solid ${masked?"#1E293B":"#CBD5E1"}`,borderRadius:8,background:masked?"#1E293B":"#F8FAFC",color:masked?"#fff":"#64748B",cursor:"pointer",fontSize:12,fontWeight:600}}>
+                {masked?"🙈":"👁"}<span className="hide-mobile" style={{marginLeft:4}}>{masked?"Masked":"Visible"}</span>
+              </button>
+              <button onClick={()=>setExportReq({title:"Founder Finance Export",rows:null})} title="Export transactions" style={{...S.btnGhost,padding:"7px 10px",fontSize:12}}>↓<span className="hide-mobile" style={{marginLeft:4}}>Export</span></button>
+              <button onClick={()=>setShowAdd(true)} style={{...S.btnPrimary,padding:"8px 12px",fontSize:13}}>+<span className="hide-mobile" style={{marginLeft:4}}>Add</span></button>
             </div>
-            <button onClick={toggleMask} style={{padding:"6px 12px",border:`1.5px solid ${masked?"#1E293B":"#CBD5E1"}`,borderRadius:8,background:masked?"#1E293B":"#F8FAFC",color:masked?"#fff":"#64748B",cursor:"pointer",fontSize:12,fontWeight:600,flexShrink:0}}>
-              {masked?"🙈 Masked":"👁 Visible"}
-            </button>
-            <button onClick={()=>setShowAdd(true)} style={{...S.btnPrimary,padding:"8px 14px",fontSize:13,flexShrink:0}}>+ Add</button>
           </div>
           {/* Desktop tabs */}
           <div className="desktop-nav" style={{maxWidth:1440,margin:"0 auto",padding:"0 12px",display:"flex",overflowX:"auto"}}>
             {TABS.map(([id,icon,lbl])=>(
               <button key={id} onClick={()=>{setTab(id);if(id!=="entries")setFilterAcct(null);}} style={{padding:"10px 18px",fontSize:13,fontWeight:tab===id?700:500,color:tab===id?"#4F46E5":"#64748B",border:"none",borderBottom:tab===id?"2px solid #4F46E5":"2px solid transparent",marginBottom:-1,background:"none",cursor:"pointer",whiteSpace:"nowrap",display:"flex",alignItems:"center",gap:6}}>
                 <span>{icon}</span>{lbl}
-                {id==="entries"&&<span style={{...S.badge,fontSize:10,background:"#EEF2FF",color:"#4F46E5",marginLeft:2}}>{entries.length}</span>}
+                {id==="entries"&&<span style={{...S.badge,fontSize:10,background:"#EEF2FF",color:"#4F46E5",marginLeft:2}}>{effectiveEntries.length}</span>}
               </button>
             ))}
           </div>
@@ -1284,11 +1595,11 @@ CREATE POLICY "public_access" ON ffd_settings FOR ALL TO anon USING (true) WITH 
 
         {/* Content */}
         <div className="content-pad" style={{maxWidth:1440,margin:"0 auto",padding:"24px 20px 40px"}}>
-          {tab==="dashboard"&&<DashboardTab entries={entries} channels={channels} fxRate={fxRate} onTabChange={t=>{setTab(t);}} onImport={setImportAcct}/>}
-          {tab==="ai"        &&<AIInsightsTab entries={entries} channels={channels} fxRate={fxRate} apiKey={apiKey} onSetApiKey={onSetApiKey}/>}
-          {tab==="entries"   &&<EntriesTab entries={entries} fxRate={fxRate} onEdit={setEditE} onDelete={onDelete} filterAccount={filterAcct}/>}
-          {tab==="accounts"  &&<AccountsTab entries={entries} fxRate={fxRate} onEdit={setEditE} onDelete={onDelete} onImport={setImportAcct} onViewEntries={onViewEntries}/>}
-          {tab==="channels"  &&<ChannelsTab entries={entries} channels={channels} fxRate={fxRate} onEditCh={ch=>{setEditCh(ch);setShowChModal(true);}} onDelCh={onDelCh} onAddCh={()=>{setEditCh(null);setShowChModal(true);}}/>}
+          {tab==="dashboard"&&<DashboardTab entries={effectiveEntries} channels={channels} fxRate={fxRate} onTabChange={t=>{setTab(t);}} onImport={setImportAcct} onExport={setExportReq}/>}
+          {tab==="ai"        &&<AIInsightsTab entries={effectiveEntries} channels={channels} fxRate={fxRate} apiKey={apiKey} onSetApiKey={onSetApiKey}/>}
+          {tab==="entries"   &&<EntriesTab entries={effectiveEntries} fxRate={fxRate} onEdit={setEditE} onDelete={onDelete} filterAccount={filterAcct} onExport={setExportReq}/>}
+          {tab==="accounts"  &&<AccountsTab entries={effectiveEntries} fxRate={fxRate} onEdit={setEditE} onDelete={onDelete} onImport={setImportAcct} onViewEntries={onViewEntries} onExport={setExportReq}/>}
+          {tab==="channels"  &&<ChannelsTab entries={effectiveEntries} channels={channels} fxRate={fxRate} onEditCh={ch=>{setEditCh(ch);setShowChModal(true);}} onDelCh={onDelCh} onAddCh={()=>{setEditCh(null);setShowChModal(true);}} onExport={setExportReq}/>}
         </div>
 
         {/* Mobile bottom nav */}
@@ -1306,6 +1617,8 @@ CREATE POLICY "public_access" ON ffd_settings FOR ALL TO anon USING (true) WITH 
         {editE        &&<EditModal entry={editE} onSave={onEdit} onClose={()=>setEditE(null)}/>}
         {showChModal  &&<ChannelModal ch={editCh} onSave={onSaveCh} onClose={()=>{setShowChModal(false);setEditCh(null);}}/>}
         {importAcct   &&<SmartImport accountId={importAcct} entries={entries} onDone={onImported} onClose={()=>setImportAcct(null)} onLearn={onLearn}/>}
+        {exportReq    &&<ExportModal defaults={exportReq} entries={effectiveEntries} accounts={ACCOUNTS} fxRate={fxRate} onClose={()=>setExportReq(null)}/>}
+        {showDupModal &&<DuplicatesModal groups={dupGroups} onDelete={async id=>{await dbDelete(id);setEntries(p=>p.filter(r=>r.id!==id));}} onClose={()=>setShowDupModal(false)}/>}
       </div>
     </MaskCtx.Provider>
   );
